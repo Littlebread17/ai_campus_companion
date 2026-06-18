@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "409017158410",
+    "project_id": "ai-campus-companion-413c3",
+    "storage_bucket": "ai-campus-companion-413c3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:409017158410:android:10adecf38504a1e5a388f3",
+        "android_client_info": {
+          "package_name": "com.example.ai_campus_companion"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBVlgHcQRsvDRMh2PZNT_BF3xCaYWDlL4o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

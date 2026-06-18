@@ -1,0 +1,12 @@
+{
+  "name": "ai-campus-companion-firestore-seed",
+  "version": "1.0.0",
+  "description": "Firestore seed script for AI Campus Companion FYP project",
+  "main": "seed_firestore.js",
+  "scripts": {
+    "seed": "node seed_firestore.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^10.3.0"
+  }
+}
