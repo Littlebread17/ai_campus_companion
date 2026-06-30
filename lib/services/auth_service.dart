@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'notification_service.dart';
+
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -8,6 +10,78 @@ class AuthService {
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
   User? get currentUser => _auth.currentUser;
+
+  Future<String?> loginUser({
+    required String email,
+    required String password,
+  }) async {
+    try {
+      final credential = await _auth.signInWithEmailAndPassword(
+        email: email.trim(),
+        password: password.trim(),
+      );
+
+      final user = credential.user;
+      if (user == null) return 'Unable to sign in.';
+
+      final profileReady = await _ensureSchoolProfile(user);
+      if (!profileReady) {
+        await _auth.signOut();
+        return 'This account is not registered by the school. Please contact admin.';
+      }
+
+      try {
+        await NotificationService().saveCurrentToken();
+      } catch (_) {
+        // Push token saving should not block a valid school login.
+      }
+
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return '${e.code}: ${e.message}';
+    } on FirebaseException catch (e) {
+      return '${e.code}: ${e.message}';
+    } catch (e) {
+      return 'Unknown error: $e';
+    }
+  }
+
+  Future<bool> _ensureSchoolProfile(User user) async {
+    final userRef = _firestore.collection('users').doc(user.uid);
+    final userDoc = await userRef.get();
+    if (userDoc.exists) return true;
+
+    final email = (user.email ?? '').trim().toLowerCase();
+    if (email.isEmpty) return false;
+
+    final registryRef = _firestore.collection('studentRegistry');
+    final uidRegistry = await registryRef.doc(user.uid).get();
+    Map<String, dynamic>? data;
+
+    if (uidRegistry.exists) {
+      data = uidRegistry.data();
+    } else {
+      final emailRegistry = await registryRef.doc(email).get();
+      if (!emailRegistry.exists) return false;
+      data = emailRegistry.data();
+    }
+
+    final registryData = data;
+    if (registryData == null) return false;
+
+    await userRef.set({
+      'name':
+          registryData['name'] ?? user.displayName ?? email.split('@').first,
+      'email': email,
+      'studentId': registryData['studentId'] ?? '',
+      'programme': registryData['programme'] ?? '',
+      'year': registryData['year'] ?? '',
+      'role': registryData['role'] ?? 'student',
+      'createdAt': FieldValue.serverTimestamp(),
+      'source': 'studentRegistry',
+    }, SetOptions(merge: true));
+    return true;
+  }
 
   Future<String?> registerUser({
     required String name,
@@ -17,69 +91,7 @@ class AuthService {
     required String programme,
     required String year,
   }) async {
-    try {
-      print('Starting registration...');
-
-      UserCredential userCredential =
-          await _auth.createUserWithEmailAndPassword(
-        email: email.trim(),
-        password: password.trim(),
-      );
-
-      print('Firebase Auth user created.');
-
-      String uid = userCredential.user!.uid;
-
-      await _firestore.collection('users').doc(uid).set({
-        'name': name.trim(),
-        'email': email.trim(),
-        'studentId': studentId.trim(),
-        'programme': programme.trim(),
-        'year': year.trim(),
-        'role': 'student',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      print('User data saved to Firestore.');
-
-      return null;
-    } on FirebaseAuthException catch (e) {
-      print('FirebaseAuthException: ${e.code} - ${e.message}');
-      return '${e.code}: ${e.message}';
-    } on FirebaseException catch (e) {
-      print('FirebaseException: ${e.code} - ${e.message}');
-      return '${e.code}: ${e.message}';
-    } catch (e) {
-      print('Unknown register error: $e');
-      return 'Unknown error: $e';
-    }
-  }
-
-  Future<String?> loginUser({
-    required String email,
-    required String password,
-  }) async {
-    try {
-      print('Starting login...');
-
-      await _auth.signInWithEmailAndPassword(
-        email: email.trim(),
-        password: password.trim(),
-      );
-
-      print('Login successful.');
-
-      return null;
-    } on FirebaseAuthException catch (e) {
-      print('FirebaseAuthException: ${e.code} - ${e.message}');
-      return '${e.code}: ${e.message}';
-    } on FirebaseException catch (e) {
-      print('FirebaseException: ${e.code} - ${e.message}');
-      return '${e.code}: ${e.message}';
-    } catch (e) {
-      print('Unknown login error: $e');
-      return 'Unknown error: $e';
-    }
+    return 'Registration is managed by the school. Please use your school-created account.';
   }
 
   Future<void> logoutUser() async {

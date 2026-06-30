@@ -1,16 +1,40 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'screens/auth_wrapper.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e, st) {
+    // If Firebase itself fails to start, show an error instead of a blank
+    // white screen so the problem is visible.
+    debugPrint('Firebase init failed: $e\n$st');
+    runApp(_StartupErrorApp(message: 'Firebase failed to initialize:\n$e'));
+    return;
+  }
+
+  // Notification setup must never block the app from rendering. On web it can
+  // throw (missing service worker / VAPID key); we fire it without awaiting and
+  // swallow errors so the UI always loads.
+  unawaited(_initNotificationsSafely());
 
   runApp(const AICampusCompanionApp());
+}
+
+Future<void> _initNotificationsSafely() async {
+  try {
+    await NotificationService().initialize();
+  } catch (e, st) {
+    debugPrint('Notification init skipped: $e\n$st');
+  }
 }
 
 class AICampusCompanionApp extends StatelessWidget {
@@ -27,6 +51,37 @@ class AICampusCompanionApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xfff4f7fb),
       ),
       home: const AuthWrapper(),
+    );
+  }
+}
+
+class _StartupErrorApp extends StatelessWidget {
+  final String message;
+  const _StartupErrorApp({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                const SizedBox(height: 16),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

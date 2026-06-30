@@ -1,0 +1,46 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasProfile() {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return hasProfile() &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isEventAdmin() {
+      return hasProfile() &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in [
+          'event_admin',
+          'admin'
+        ];
+    }
+
+    function isPdfProposal() {
+      return request.resource != null &&
+        request.resource.size < 10 * 1024 * 1024 &&
+        request.resource.contentType == 'application/pdf';
+    }
+
+    match /event_proposals/{userId}/{fileName} {
+      allow read: if signedIn() &&
+        (request.auth.uid == userId || isEventAdmin() || isAdmin());
+      allow create, update: if signedIn() &&
+        request.auth.uid == userId &&
+        isPdfProposal();
+      allow delete: if isAdmin();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
