@@ -46,9 +46,22 @@ class AICampusCompanionApp extends StatelessWidget {
       title: 'AI Campus Companion',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorSchemeSeed: Colors.blue,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xff2563eb),
+          primary: const Color(0xff2563eb),
+          secondary: const Color(0xff7c3aed),
+          tertiary: const Color(0xff06b6d4),
+          surface: Colors.white,
+        ),
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xfff4f7fb),
+        scaffoldBackgroundColor: const Color(0xfff6f8ff),
+        cardTheme: CardThemeData(
+          color: Colors.white,
+          elevation: 1.5,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
       ),
       home: const AuthWrapper(),
     );
