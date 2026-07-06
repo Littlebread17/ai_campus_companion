@@ -1,13 +1,10 @@
-import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../services/firestore_service.dart';
-import '../services/routing_service.dart';
 import 'arrow_navigation_screen.dart';
 
 class LocationsScreen extends StatefulWidget {
@@ -27,9 +24,6 @@ class _CampusLocation {
   final String category;
   final String directionText;
   final List<String> keywords;
-
-  /// Optional precise coordinate from Firestore. When null we fall back to the
-  /// building's coordinate so older location records still appear on the map.
   final double? latitude;
   final double? longitude;
 
@@ -48,31 +42,15 @@ class _CampusLocation {
 
 class _LocationsScreenState extends State<LocationsScreen> {
   final service = FirestoreService();
-  final routing = RoutingService();
-  final mapController = MapController();
   late final TextEditingController search;
 
   String currentBlock = 'Academic Block A';
   String currentLevel = 'Ground floor';
-  String locationNote =
-      'Tap "Use GPS" to place yourself on the map, then pick a destination.';
-  bool locating = false;
+  String selectedCategory = 'All';
+  bool useLiftRoute = false;
 
-  LatLng? userLatLng;
-  StreamSubscription<Position>? _positionSub;
-
-  _CampusLocation? destination;
-  List<LatLng> routePoints = [];
-  String? routeSummary;
-  bool routingInProgress = false;
-
-  /// Campus centre used as the initial map focus (real surveyed point).
-  static const campusCenter = LatLng(2.813998189213002, 101.75827328655846);
-
-  /// Coordinate for each campus block, clustered around the real campus centre.
-  /// These are approximate offsets — set a precise latitude/longitude per room
-  /// in the admin Location form (or here) by copying the point from Google Maps
-  /// for the most accurate arrow guidance.
+  /// Coordinate for each campus block (used only to give the arrow guide a
+  /// target bearing — there is no map view).
   static const Map<String, LatLng> buildingCoords = {
     'Academic Block A': LatLng(2.814000, 101.758273),
     'Academic Block B': LatLng(2.814300, 101.758500),
@@ -107,6 +85,19 @@ class _LocationsScreenState extends State<LocationsScreen> {
     'Level 4',
     'Level 5',
     'Rooftop',
+  ];
+
+  static const categories = [
+    'All',
+    'Classroom',
+    'Laboratory',
+    'Faculty',
+    'Support',
+    'Office',
+    'Study',
+    'Facility',
+    'Sports',
+    'Residence',
   ];
 
   static const starterLocations = [
@@ -340,13 +331,10 @@ class _LocationsScreenState extends State<LocationsScreen> {
 
   @override
   void dispose() {
-    _positionSub?.cancel();
     search.dispose();
     super.dispose();
   }
 
-  /// Resolve a location to a map coordinate: prefer its own lat/lng, then its
-  /// building coordinate, otherwise null (not shown on the map).
   LatLng? _coordFor(_CampusLocation location) {
     if (location.latitude != null && location.longitude != null) {
       return LatLng(location.latitude!, location.longitude!);
@@ -354,139 +342,27 @@ class _LocationsScreenState extends State<LocationsScreen> {
     return buildingCoords[location.building];
   }
 
-  Future<void> detectPosition() async {
-    setState(() {
-      locating = true;
-      locationNote = 'Checking phone GPS...';
-    });
-
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        setState(() {
-          locationNote =
-              'Location service is off. Confirm your block manually.';
-          locating = false;
-        });
-        return;
-      }
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        setState(() {
-          locationNote =
-              'Location permission was not allowed. Confirm your block manually.';
-          locating = false;
-        });
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 10),
-        ),
-      );
-
-      if (!mounted) return;
-      final here = LatLng(position.latitude, position.longitude);
-      setState(() {
-        userLatLng = here;
-        locationNote =
-            'Live GPS active (about ${position.accuracy.round()}m accuracy). Pick a destination to draw the walking route.';
-        locating = false;
-      });
-      mapController.move(here, 17);
-      _startLiveTracking();
-      // Re-route from the new position if a destination is already chosen.
-      if (destination != null) _route(destination!);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        locationNote =
-            'Unable to read GPS now. Confirm your block and level manually.';
-        locating = false;
-      });
+  IconData _categoryIcon(String category) {
+    switch (category) {
+      case 'Classroom':
+        return Icons.meeting_room;
+      case 'Laboratory':
+        return Icons.science;
+      case 'Faculty':
+        return Icons.school;
+      case 'Support':
+        return Icons.support_agent;
+      case 'Office':
+        return Icons.badge;
+      case 'Study':
+        return Icons.local_library;
+      case 'Sports':
+        return Icons.sports_soccer;
+      case 'Residence':
+        return Icons.hotel;
+      default:
+        return Icons.apartment;
     }
-  }
-
-  void _startLiveTracking() {
-    _positionSub?.cancel();
-    _positionSub =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 3,
-          ),
-        ).listen((position) {
-          if (!mounted) return;
-          setState(() {
-            userLatLng = LatLng(position.latitude, position.longitude);
-          });
-        });
-  }
-
-  Future<void> _route(_CampusLocation target) async {
-    final destCoord = _coordFor(target);
-    setState(() {
-      destination = target;
-      routeSummary = null;
-      routePoints = [];
-      routingInProgress = userLatLng != null && destCoord != null;
-    });
-
-    if (destCoord == null) {
-      setState(() {
-        routeSummary = 'No map coordinate for this place yet. '
-            'Use the indoor steps below.';
-      });
-      return;
-    }
-    if (userLatLng == null) {
-      setState(() {
-        routeSummary = 'Tap "Use GPS" first to draw a route from where you are.';
-      });
-      mapController.move(destCoord, 17);
-      return;
-    }
-
-    final route = await routing.getWalkingRoute(userLatLng!, destCoord);
-    if (!mounted) return;
-
-    if (route == null) {
-      // Fallback: straight line if the routing server is unreachable.
-      final straight = const Distance().as(
-        LengthUnit.Meter,
-        userLatLng!,
-        destCoord,
-      );
-      setState(() {
-        routePoints = [userLatLng!, destCoord];
-        routeSummary =
-            'Approx ${straight.round()} m (straight line — routing offline).';
-        routingInProgress = false;
-      });
-    } else {
-      setState(() {
-        routePoints = route.points;
-        routeSummary = '${route.distanceLabel} · ${route.etaLabel}';
-        routingInProgress = false;
-      });
-    }
-    _fitRoute(destCoord);
-  }
-
-  void _fitRoute(LatLng destCoord) {
-    final pts = routePoints.isNotEmpty ? routePoints : [userLatLng!, destCoord];
-    final bounds = LatLngBounds.fromPoints(pts);
-    mapController.fitCamera(
-      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(48)),
-    );
   }
 
   void _openArrowGuide(_CampusLocation location) {
@@ -502,14 +378,6 @@ class _LocationsScreenState extends State<LocationsScreen> {
         ),
       ),
     );
-  }
-
-  void _clearRoute() {
-    setState(() {
-      destination = null;
-      routePoints = [];
-      routeSummary = null;
-    });
   }
 
   _CampusLocation _fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
@@ -544,13 +412,16 @@ class _LocationsScreenState extends State<LocationsScreen> {
       if (!exists) locations.add(fallback);
     }
     locations.sort(
-      (a, b) => '${a.building} ${a.name}'.compareTo('${b.building} ${b.name}'),
+      (a, b) => '${a.category} ${a.name}'.compareTo('${b.category} ${b.name}'),
     );
     return locations;
   }
 
   bool _matches(_CampusLocation location) {
     final query = search.text.trim().toLowerCase();
+    final categoryMatches =
+        selectedCategory == 'All' || location.category == selectedCategory;
+    if (!categoryMatches) return false;
     if (query.isEmpty) return true;
     final haystack = [
       location.name,
@@ -571,354 +442,687 @@ class _LocationsScreenState extends State<LocationsScreen> {
         .toList();
     return [
       'Start from $currentBlock, $currentLevel.',
+      if (useLiftRoute)
+        'Use lift-accessible paths where available and avoid stairs.',
       ...detailSteps,
       'Confirm the room label: ${location.room.isEmpty ? location.name : location.room}.',
     ];
   }
 
-  IconData _stepIcon(int index, int lastIndex) {
-    if (index == 0) return Icons.my_location;
-    if (index == lastIndex) return Icons.flag;
-    if (index == 1) return Icons.directions_walk;
-    if (index == 2) return Icons.stairs;
-    return Icons.arrow_forward;
+  Widget _searchBox() {
+    return TextField(
+      controller: search,
+      onChanged: (_) => setState(() {}),
+      decoration: InputDecoration(
+        hintText: 'Search room, office, facility...',
+        prefixIcon: const Icon(Icons.search),
+        filled: true,
+        fillColor: Colors.white,
+        suffixIcon: search.text.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear',
+                onPressed: () {
+                  search.clear();
+                  setState(() {});
+                },
+                icon: const Icon(Icons.close),
+              ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xffdbe5f2)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xffdbe5f2)),
+        ),
+      ),
+    );
   }
 
-  Widget _liveMap(List<_CampusLocation> locations) {
-    final markers = <Marker>[];
-
-    for (final location in locations) {
-      final coord = _coordFor(location);
-      if (coord == null) continue;
-      final isDestination = identical(location, destination) ||
-          (destination != null &&
-              location.name == destination!.name &&
-              location.room == destination!.room);
-      markers.add(
-        Marker(
-          point: coord,
-          width: 40,
-          height: 40,
-          child: GestureDetector(
-            onTap: () => _route(location),
-            child: Icon(
-              Icons.location_on,
-              color: isDestination ? Colors.red : Colors.purple,
-              size: isDestination ? 40 : 30,
+  Widget _categoryChips() {
+    return SizedBox(
+      height: 40,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: categories.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final category = categories[index];
+          final selected = category == selectedCategory;
+          return ChoiceChip(
+            label: Text(category),
+            selected: selected,
+            showCheckmark: false,
+            selectedColor: const Color(0xff2563eb),
+            backgroundColor: Colors.white,
+            labelStyle: TextStyle(
+              color: selected ? Colors.white : const Color(0xff334155),
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
             ),
-          ),
-        ),
-      );
-    }
+            side: BorderSide(
+              color: selected
+                  ? const Color(0xff2563eb)
+                  : const Color(0xffdbe5f2),
+            ),
+            onSelected: (_) => setState(() => selectedCategory = category),
+          );
+        },
+      ),
+    );
+  }
 
-    if (userLatLng != null) {
-      markers.add(
-        Marker(
-          point: userLatLng!,
-          width: 26,
-          height: 26,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.blue,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 3),
-              boxShadow: const [
-                BoxShadow(color: Colors.black26, blurRadius: 4),
+  Widget _startingPointPanel() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xffe2e8f0)),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          leading: const Icon(Icons.my_location, color: Color(0xff2563eb)),
+          title: const Text(
+            'Starting point',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          subtitle: Text(
+            '$currentBlock · $currentLevel',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12),
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          children: [
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Set where you are so the indoor steps start correctly.',
+                style: TextStyle(fontSize: 12, color: Color(0xff64748b)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: currentBlock,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Block',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: blocks
+                        .map(
+                          (block) => DropdownMenuItem(
+                            value: block,
+                            child: Text(
+                              block,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) setState(() => currentBlock = value);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: currentLevel,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Level',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: levels
+                        .map(
+                          (level) => DropdownMenuItem(
+                            value: level,
+                            child: Text(
+                              level,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) setState(() => currentLevel = value);
+                    },
+                  ),
+                ),
               ],
             ),
-          ),
-        ),
-      );
-    }
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: SizedBox(
-        height: 300,
-        child: FlutterMap(
-          mapController: mapController,
-          options: MapOptions(
-            initialCenter: userLatLng ?? campusCenter,
-            initialZoom: 17,
-            minZoom: 14,
-            maxZoom: 19,
-          ),
-          children: [
-            TileLayer(
-              urlTemplate:
-                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.ai_campus_companion',
-              maxZoom: 19,
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: useLiftRoute,
+              onChanged: (v) => setState(() => useLiftRoute = v),
+              title: const Text('Prefer lift route'),
+              dense: true,
             ),
-            if (routePoints.isNotEmpty)
-              PolylineLayer(
-                polylines: [
-                  Polyline(
-                    points: routePoints,
-                    strokeWidth: 5,
-                    color: Colors.blue,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _locationRow(_CampusLocation location) {
+    final color = const Color(0xff2563eb);
+    final canGuide = _coordFor(location) != null;
+    return InkWell(
+      onTap: () => _openLocationSheet(location),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(_categoryIcon(location.category), color: color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    location.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                      color: Color(0xff0f172a),
+                    ),
+                  ),
+                  Text(
+                    [
+                      if (location.building.isNotEmpty) location.building,
+                      if (location.level.isNotEmpty) location.level,
+                    ].join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xff94a3b8),
+                    ),
                   ),
                 ],
               ),
-            MarkerLayer(markers: markers),
+            ),
+            IconButton(
+              tooltip: 'Guide me',
+              onPressed: canGuide ? () => _openArrowGuide(location) : null,
+              icon: Icon(Icons.navigation, color: color),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _routeBanner() {
-    if (destination == null) return const SizedBox.shrink();
-    return Card(
-      color: const Color(0xffe8f0fe),
-      child: ListTile(
-        leading: routingInProgress
-            ? const SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.directions_walk, color: Colors.blue),
-        title: Text(
-          'To ${destination!.name}',
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(routeSummary ?? 'Finding the best walking route...'),
-        trailing: IconButton(
-          tooltip: 'Clear route',
-          icon: const Icon(Icons.close),
-          onPressed: _clearRoute,
-        ),
+  void _openLocationSheet(_CampusLocation location) {
+    final steps = _directionSteps(location);
+    final canGuide = _coordFor(location) != null;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-    );
-  }
-
-  Widget _currentLocationPanel() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      builder: (_) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        builder: (context, controller) => ListView(
+          controller: controller,
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
           children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xffcbd5e1),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             Row(
               children: [
-                const Icon(Icons.my_location, color: Colors.blue),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Current starting point',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: const Color(0xff2563eb).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    _categoryIcon(location.category),
+                    color: const Color(0xff2563eb),
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: locating ? null : detectPosition,
-                  icon: locating
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.gps_fixed, size: 18),
-                  label: Text(locating ? 'Locating' : 'Use GPS'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(locationNote),
-            const SizedBox(height: 12),
-            const Text(
-              'Indoor handoff: confirm the block and level you are on so the '
-              'step-by-step indoor directions start correctly.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              initialValue: currentBlock,
-              decoration: const InputDecoration(
-                labelText: 'Block',
-                border: OutlineInputBorder(),
-              ),
-              items: blocks
-                  .map(
-                    (block) =>
-                        DropdownMenuItem(value: block, child: Text(block)),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value != null) setState(() => currentBlock = value);
-              },
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              initialValue: currentLevel,
-              decoration: const InputDecoration(
-                labelText: 'Level',
-                border: OutlineInputBorder(),
-              ),
-              items: levels
-                  .map(
-                    (level) =>
-                        DropdownMenuItem(value: level, child: Text(level)),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value != null) setState(() => currentLevel = value);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _locationCard(_CampusLocation location) {
-    final steps = _directionSteps(location);
-    final hasCoord = _coordFor(location) != null;
-    return Card(
-      child: ExpansionTile(
-        leading: const Icon(Icons.place, color: Colors.purple),
-        title: Text(location.name),
-        subtitle: Text(
-          [
-            if (location.building.isNotEmpty) location.building,
-            if (location.level.isNotEmpty) location.level,
-            if (location.room.isNotEmpty) location.room,
-          ].join(' - '),
-        ),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            avatar: const Icon(Icons.category, size: 16),
-                            label: Text(location.category),
-                          ),
-                          Chip(
-                            avatar: const Icon(Icons.near_me, size: 16),
-                            label: Text('From $currentBlock'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                if (hasCoord)
-                  Wrap(
-                    spacing: 8,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      FilledButton.icon(
-                        onPressed: () => _openArrowGuide(location),
-                        icon: const Icon(Icons.navigation),
-                        label: const Text('Arrow guide'),
+                      Text(
+                        location.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                        ),
                       ),
-                      OutlinedButton.icon(
-                        onPressed: () => _route(location),
-                        icon: const Icon(Icons.map),
-                        label: const Text('Show on map'),
+                      Text(
+                        [
+                          if (location.building.isNotEmpty) location.building,
+                          if (location.level.isNotEmpty) location.level,
+                          if (location.room.isNotEmpty) location.room,
+                        ].join(' · '),
+                        style: const TextStyle(color: Color(0xff64748b)),
                       ),
                     ],
                   ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Indoor steps',
-                  style: TextStyle(fontWeight: FontWeight.w700),
                 ),
-                ...steps.asMap().entries.map((entry) {
-                  return ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(_stepIcon(entry.key, steps.length - 1)),
-                    title: Text(entry.value),
-                  );
-                }),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: canGuide
+                    ? () {
+                        Navigator.pop(context);
+                        _openArrowGuide(location);
+                      }
+                    : null,
+                icon: const Icon(Icons.navigation),
+                label: const Text('Start arrow guide'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Indoor directions',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+            ),
+            const SizedBox(height: 8),
+            ...steps.asMap().entries.map(
+              (entry) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 24,
+                      height: 24,
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(
+                        color: Color(0xffe0e7ff),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        '${entry.key + 1}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xff4338ca),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(entry.value)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final userId = FirebaseAuth.instance.currentUser?.uid ?? '';
     return Scaffold(
+      backgroundColor: const Color(0xfff6f8ff),
       appBar: AppBar(title: const Text('Campus Navigation')),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: service.streamCollection('locations'),
         builder: (context, snapshot) {
-          final hasError = snapshot.hasError;
-          final loading = !snapshot.hasData && !hasError;
+          final loading = !snapshot.hasData && !snapshot.hasError;
           final docs = snapshot.data?.docs ?? [];
           final allLocations = _mergeLocations(docs);
           final locations = allLocations.where(_matches).toList();
 
+          // Group filtered locations by category for section headers.
+          final grouped = <String, List<_CampusLocation>>{};
+          for (final loc in locations) {
+            grouped.putIfAbsent(loc.category, () => []).add(loc);
+          }
+          final groupKeys = grouped.keys.toList()..sort();
+
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _liveMap(allLocations),
-              const SizedBox(height: 10),
-              _routeBanner(),
-              const SizedBox(height: 4),
-              TextField(
-                controller: search,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  labelText: 'Search room, block, or facility',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: search.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Clear',
-                          onPressed: () {
-                            search.clear();
-                            setState(() {});
-                          },
-                          icon: const Icon(Icons.close),
-                        ),
-                  border: const OutlineInputBorder(),
-                ),
+              _searchBox(),
+              const SizedBox(height: 12),
+              _NextClassShortcut(
+                service: service,
+                userId: userId,
+                allLocations: allLocations,
+                onNavigate: _openArrowGuide,
               ),
               const SizedBox(height: 12),
-              _currentLocationPanel(),
-              if (hasError)
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.info_outline),
-                    title: const Text('Using built-in campus locations'),
-                    subtitle: Text('${snapshot.error}'),
-                  ),
-                ),
+              _categoryChips(),
+              const SizedBox(height: 12),
+              _startingPointPanel(),
+              const SizedBox(height: 8),
               if (loading)
                 const Padding(
                   padding: EdgeInsets.all(24),
                   child: Center(child: CircularProgressIndicator()),
-                ),
-              if (!loading && locations.isEmpty)
-                const Card(
-                  child: ListTile(
-                    leading: Icon(Icons.search_off),
-                    title: Text('No matching location found'),
+                )
+              else if (locations.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(
+                    child: Column(
+                      children: [
+                        Icon(Icons.search_off, color: Color(0xff94a3b8)),
+                        SizedBox(height: 8),
+                        Text('No matching location found'),
+                      ],
+                    ),
                   ),
                 )
-              else if (!loading)
-                ...locations.map(_locationCard),
+              else
+                ...groupKeys.map((category) {
+                  final items = grouped[category]!;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(4, 14, 4, 4),
+                        child: Text(
+                          category.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.5,
+                            color: Color(0xff94a3b8),
+                          ),
+                        ),
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xffe2e8f0)),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 2,
+                        ),
+                        child: Column(
+                          children: [
+                            for (var i = 0; i < items.length; i++) ...[
+                              _locationRow(items[i]),
+                              if (i != items.length - 1)
+                                const Divider(height: 1),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                }),
               const SizedBox(height: 24),
             ],
           );
         },
       ),
+    );
+  }
+}
+
+class _NextClassShortcut extends StatelessWidget {
+  const _NextClassShortcut({
+    required this.service,
+    required this.userId,
+    required this.allLocations,
+    required this.onNavigate,
+  });
+
+  final FirestoreService service;
+  final String userId;
+  final List<_CampusLocation> allLocations;
+  final ValueChanged<_CampusLocation> onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    if (userId.isEmpty) return const SizedBox.shrink();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: service.streamUserTimetable(userId),
+      builder: (context, snapshot) {
+        final rows =
+            snapshot.data?.docs
+                .map((doc) => _ClassShortcutItem.fromMap(doc.data()))
+                .whereType<_ClassShortcutItem>()
+                .toList() ??
+            const <_ClassShortcutItem>[];
+        final nextClass = _nextUpcomingClass(rows);
+        if (nextClass == null) return const SizedBox.shrink();
+
+        final location = _findLocation(nextClass.room, allLocations);
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xff2563eb), Color(0xff7c3aed)],
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              const CircleAvatar(
+                backgroundColor: Colors.white24,
+                child: Icon(Icons.bolt, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Next: ${nextClass.courseCode}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                    Text(
+                      '${nextClass.startLabel} · ${nextClass.room.isEmpty ? nextClass.courseName : nextClass.room}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              if (location != null)
+                FilledButton(
+                  onPressed: () => onNavigate(location),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xff2563eb),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                  ),
+                  child: const Text('Guide me'),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  static _ClassShortcutItem? _nextUpcomingClass(List<_ClassShortcutItem> rows) {
+    if (rows.isEmpty) return null;
+    final now = DateTime.now();
+    final todayIndex = now.weekday - 1;
+
+    _ClassShortcutItem? best;
+    DateTime? bestTime;
+    for (final row in rows) {
+      final dayIndex = _dayIndex(row.day);
+      final start = _parseTime(row.startTime);
+      if (dayIndex == null || start == null) continue;
+
+      var dayOffset = (dayIndex - todayIndex) % 7;
+      var candidate = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        start.hour,
+        start.minute,
+      ).add(Duration(days: dayOffset));
+      if (!candidate.isAfter(now)) {
+        candidate = candidate.add(const Duration(days: 7));
+        dayOffset += 7;
+      }
+
+      if (bestTime == null || candidate.isBefore(bestTime)) {
+        best = row.copyWith(startLabel: _formatStart(candidate, dayOffset));
+        bestTime = candidate;
+      }
+    }
+    return best;
+  }
+
+  static _CampusLocation? _findLocation(
+    String rawRoom,
+    List<_CampusLocation> locations,
+  ) {
+    final room = rawRoom.trim().toLowerCase();
+    if (room.isEmpty) return null;
+    final normalizedRoom = room.replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+    for (final location in locations) {
+      final fields = [
+        location.room,
+        location.name,
+        location.building,
+      ].join(' ').toLowerCase();
+      final normalizedFields = fields.replaceAll(RegExp(r'[^a-z0-9]'), '');
+      if (fields.contains(room) || normalizedFields.contains(normalizedRoom)) {
+        return location;
+      }
+    }
+    return null;
+  }
+
+  static int? _dayIndex(String day) {
+    const days = {
+      'monday': 0,
+      'mon': 0,
+      'tuesday': 1,
+      'tue': 1,
+      'wednesday': 2,
+      'wed': 2,
+      'thursday': 3,
+      'thu': 3,
+      'friday': 4,
+      'fri': 4,
+      'saturday': 5,
+      'sat': 5,
+      'sunday': 6,
+      'sun': 6,
+    };
+    return days[day.trim().toLowerCase()];
+  }
+
+  static TimeOfDay? _parseTime(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    for (final pattern in ['HH:mm', 'H:mm', 'hh:mm a', 'h:mm a']) {
+      try {
+        final parsed = DateFormat(pattern).parseStrict(trimmed.toUpperCase());
+        return TimeOfDay(hour: parsed.hour, minute: parsed.minute);
+      } catch (_) {
+        // Try the next common timetable format.
+      }
+    }
+    return null;
+  }
+
+  static String _formatStart(DateTime value, int dayOffset) {
+    final time = DateFormat('HH:mm').format(value);
+    if (dayOffset == 0) return 'Today $time';
+    if (dayOffset == 1) return 'Tomorrow $time';
+    return '${DateFormat('EEE').format(value)} $time';
+  }
+}
+
+class _ClassShortcutItem {
+  const _ClassShortcutItem({
+    required this.courseCode,
+    required this.courseName,
+    required this.day,
+    required this.startTime,
+    required this.room,
+    this.startLabel = '',
+  });
+
+  final String courseCode;
+  final String courseName;
+  final String day;
+  final String startTime;
+  final String room;
+  final String startLabel;
+
+  static _ClassShortcutItem? fromMap(Map<String, dynamic> data) {
+    final day = (data['day'] ?? '').toString();
+    final startTime = (data['startTime'] ?? '').toString();
+    if (day.trim().isEmpty || startTime.trim().isEmpty) return null;
+    return _ClassShortcutItem(
+      courseCode: (data['courseCode'] ?? 'Class').toString(),
+      courseName: (data['courseName'] ?? '').toString(),
+      day: day,
+      startTime: startTime,
+      room: (data['room'] ?? '').toString(),
+    );
+  }
+
+  _ClassShortcutItem copyWith({String? startLabel}) {
+    return _ClassShortcutItem(
+      courseCode: courseCode,
+      courseName: courseName,
+      day: day,
+      startTime: startTime,
+      room: room,
+      startLabel: startLabel ?? this.startLabel,
     );
   }
 }

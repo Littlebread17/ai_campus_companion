@@ -2,8 +2,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../services/course_seeder_service.dart';
 import '../services/firestore_service.dart';
 import '../services/timetable_ocr_service.dart';
+import '../utils/course_utils.dart';
+import 'courses_screen.dart';
 
 /// Lets a student upload/scan a timetable screenshot, review the extracted
 /// classes, edit them, and save. Works without OCR too (manual entry).
@@ -95,14 +98,41 @@ class _TimetableUploadScreenState extends State<TimetableUploadScreen> {
         entries: valid,
         replaceExisting: _replaceExisting,
       );
+
+      // Auto-generate starter assessments + materials for each course so the
+      // course tabs are not empty.
+      setState(() => _note = 'Setting up your courses...');
+      final courses = _distinctCourses(valid);
+      final seed = CourseSeederService().buildFor(userId, courses);
+      await _service.wipeAndSeedCourses(
+        userId: userId,
+        reminders: seed.reminders,
+        resources: seed.resources,
+      );
+
       if (!mounted) return;
-      _toast('Saved ${valid.length} classes to your timetable.');
+      _toast('Saved ${valid.length} classes and set up your courses.');
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
       _toast('Could not save: $e');
     }
+  }
+
+  List<StudentCourse> _distinctCourses(List<Map<String, dynamic>> rows) {
+    final byCode = <String, StudentCourse>{};
+    for (final r in rows) {
+      final code = (r['courseCode'] ?? '').toString().trim();
+      final name = (r['courseName'] ?? '').toString().trim();
+      if (code.isEmpty && name.isEmpty) continue;
+      final full = code.isEmpty ? name : code;
+      byCode.putIfAbsent(
+        CourseUtils.baseCode(full),
+        () => StudentCourse(fullCode: full, name: name),
+      );
+    }
+    return byCode.values.toList();
   }
 
   void _toast(String message) {

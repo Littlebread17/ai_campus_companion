@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'screens/auth_wrapper.dart';
 import 'services/notification_service.dart';
+import 'widgets/canva_bubble.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,6 +46,7 @@ class AICampusCompanionApp extends StatelessWidget {
     return MaterialApp(
       title: 'AI Campus Companion',
       debugShowCheckedModeBanner: false,
+      navigatorKey: rootNavigatorKey,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xff2563eb),
@@ -63,6 +65,15 @@ class AICampusCompanionApp extends StatelessWidget {
           ),
         ),
       ),
+      builder: (context, child) {
+        // Overlay the always-available Canva chat bubble above every screen.
+        return Stack(
+          children: [
+            ?child,
+            const CanvaBubble(),
+          ],
+        );
+      },
       home: const AuthWrapper(),
     );
   }

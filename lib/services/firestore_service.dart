@@ -200,6 +200,164 @@ class FirestoreService {
     await _db.collection('calendarEvents').doc(id).delete();
   }
 
+  // ---- Grades / results (for CGPA tracking) ----
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> streamUserGrades(String userId) {
+    return _db
+        .collection('grades')
+        .where('userId', isEqualTo: userId)
+        .snapshots();
+  }
+
+  Future<void> addGrade({
+    required String userId,
+    required String courseCode,
+    required String courseName,
+    required String semester,
+    required String grade,
+    required double gradePoint,
+    required double creditHours,
+  }) async {
+    await _db.collection('grades').add({
+      'userId': userId,
+      'courseCode': courseCode,
+      'courseName': courseName,
+      'semester': semester,
+      'grade': grade,
+      'gradePoint': gradePoint,
+      'creditHours': creditHours,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> updateGrade({
+    required String id,
+    required String courseCode,
+    required String courseName,
+    required String semester,
+    required String grade,
+    required double gradePoint,
+    required double creditHours,
+  }) async {
+    await _db.collection('grades').doc(id).set({
+      'courseCode': courseCode,
+      'courseName': courseName,
+      'semester': semester,
+      'grade': grade,
+      'gradePoint': gradePoint,
+      'creditHours': creditHours,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> deleteGrade(String id) async {
+    await _db.collection('grades').doc(id).delete();
+  }
+
+  // ---- Student feedback ----
+
+  Future<void> addFeedback({
+    required String userId,
+    required String name,
+    required String email,
+    required String category,
+    required int rating,
+    required String message,
+  }) async {
+    await _db.collection('feedback').add({
+      'userId': userId,
+      'name': name,
+      'email': email,
+      'category': category,
+      'rating': rating,
+      'message': message,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> streamFeedback() {
+    return _db
+        .collection('feedback')
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
+  Future<void> saveGradesBatch({
+    required String userId,
+    required List<Map<String, dynamic>> entries,
+  }) async {
+    final batch = _db.batch();
+    final col = _db.collection('grades');
+    for (final e in entries) {
+      batch.set(col.doc(), {
+        'userId': userId,
+        'courseCode': e['courseCode'] ?? '',
+        'courseName': e['courseName'] ?? '',
+        'semester': e['semester'] ?? '',
+        'grade': e['grade'] ?? '',
+        'gradePoint': e['gradePoint'] ?? 0,
+        'creditHours': e['creditHours'] ?? 0,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
+
+  // ---- Auto-seeded course content (assessments + materials) ----
+
+  /// Removes previously auto-generated reminders + resources for the user and
+  /// writes a fresh set. Only docs tagged `auto == true` are touched, so any
+  /// items the student created or edited by hand are preserved.
+  Future<void> wipeAndSeedCourses({
+    required String userId,
+    required List<Map<String, dynamic>> reminders,
+    required List<Map<String, dynamic>> resources,
+  }) async {
+    final oldReminders = await _db
+        .collection('reminders')
+        .where('userId', isEqualTo: userId)
+        .where('auto', isEqualTo: true)
+        .get();
+    final oldResources = await _db
+        .collection('resources')
+        .where('userId', isEqualTo: userId)
+        .where('auto', isEqualTo: true)
+        .get();
+
+    // Firestore batches cap at 500 ops; chunk to stay safe.
+    final ops = <void Function(WriteBatch)>[];
+    for (final doc in oldReminders.docs) {
+      ops.add((b) => b.delete(doc.reference));
+    }
+    for (final doc in oldResources.docs) {
+      ops.add((b) => b.delete(doc.reference));
+    }
+    for (final r in reminders) {
+      ops.add((b) => b.set(_db.collection('reminders').doc(), {
+            ...r,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }));
+    }
+    for (final r in resources) {
+      ops.add((b) => b.set(_db.collection('resources').doc(), {
+            ...r,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }));
+    }
+
+    for (var i = 0; i < ops.length; i += 450) {
+      final batch = _db.batch();
+      for (final op in ops.skip(i).take(450)) {
+        op(batch);
+      }
+      await batch.commit();
+    }
+  }
+
   Future<void> createReminder({
     required String userId,
     required String title,

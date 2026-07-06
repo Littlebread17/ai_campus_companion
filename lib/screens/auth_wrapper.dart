@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
-import 'dashboard_screen.dart';
+import 'main_shell_screen.dart';
 import 'login_screen.dart';
 
 class AuthWrapper extends StatelessWidget {
@@ -17,7 +17,7 @@ class AuthWrapper extends StatelessWidget {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
-        if (snapshot.hasData) return const DashboardScreen();
+        if (snapshot.hasData) return const MainShellScreen();
         return const LoginScreen();
       },
     );

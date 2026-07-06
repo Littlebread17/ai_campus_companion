@@ -98,16 +98,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: const [
-                            _FeatureChip(label: 'Calendar'),
-                            _FeatureChip(label: 'Courses'),
-                            _FeatureChip(label: 'Due Soon'),
-                            _FeatureChip(label: 'Canva AI'),
-                          ],
-                        ),
+                        Wrap(spacing: 8, runSpacing: 8),
                       ],
                     ),
                   ),
@@ -232,24 +223,6 @@ class _LoginScreenState extends State<LoginScreen> {
         borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: Color(0xffdbe5f2)),
       ),
-    );
-  }
-}
-
-class _FeatureChip extends StatelessWidget {
-  final String label;
-  const _FeatureChip({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.17),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.24)),
-      ),
-      child: Text(label, style: const TextStyle(color: Colors.white)),
     );
   }
 }

@@ -6,21 +6,10 @@ import 'package:intl/intl.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../utils/course_utils.dart';
-import '../widgets/dashboard_card.dart';
 import 'admin_panel_screen.dart';
-import 'ai_agent_screen.dart';
 import 'announcements_screen.dart';
 import 'calendar_screen.dart';
-import 'courses_screen.dart';
-import 'events_screen.dart';
-import 'event_admin_panel_screen.dart';
-import 'event_proposal_screen.dart';
-import 'locations_screen.dart';
-import 'notifications_screen.dart';
 import 'reminders_screen.dart';
-import 'resources_screen.dart';
-import 'timetable_screen.dart';
-import 'timetable_upload_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -52,17 +41,9 @@ class DashboardScreen extends StatelessWidget {
         final role = (profile['role'] ?? 'student').toString();
         final name = (profile['name'] ?? email).toString();
         final isAdmin = role == 'admin';
-        final isEventAdmin = role == 'event_admin' || isAdmin;
 
         return Scaffold(
           backgroundColor: const Color(0xfff6f8ff),
-          floatingActionButton: FloatingActionButton(
-            tooltip: 'Talk to Canva',
-            onPressed: () => open(context, const AIAgentScreen()),
-            backgroundColor: const Color(0xff7c3aed),
-            foregroundColor: Colors.white,
-            child: const Icon(Icons.smart_toy),
-          ),
           body: SafeArea(
             child: CustomScrollView(
               slivers: [
@@ -97,15 +78,15 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 ),
 
-                // ---- My courses ----
+                // ---- What's new ----
                 _sectionTitle(
                   context,
-                  'My Courses',
-                  'See all',
-                  () => open(context, const CoursesScreen()),
+                  "What's New",
+                  'Announcements',
+                  () => open(context, const AnnouncementsScreen()),
                 ),
                 SliverToBoxAdapter(
-                  child: _MyCoursesStrip(service: service, userId: userId),
+                  child: _WhatsNewFeed(service: service, userId: userId),
                 ),
 
                 // ---- Due soon ----
@@ -130,110 +111,7 @@ class DashboardScreen extends StatelessWidget {
                   child: _AnnouncementsPreview(service: service),
                 ),
 
-                // ---- Campus tools ----
-                _sectionTitle(
-                  context,
-                  'Campus Tools',
-                  'Notifications',
-                  () => open(context, const NotificationsScreen()),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 12),
-                  sliver: SliverToBoxAdapter(
-                    child: _CompactTools(
-                      tools: [
-                        _ToolItem(
-                          icon: Icons.upload_file,
-                          label: 'Upload',
-                          color: const Color(0xff0891b2),
-                          onTap: () =>
-                              open(context, const TimetableUploadScreen()),
-                        ),
-                        _ToolItem(
-                          icon: Icons.calendar_month,
-                          label: 'Timetable',
-                          color: const Color(0xff16a34a),
-                          onTap: () => open(context, const TimetableScreen()),
-                        ),
-                        _ToolItem(
-                          icon: Icons.folder,
-                          label: 'Resources',
-                          color: const Color(0xfff59e0b),
-                          onTap: () => open(context, const ResourcesScreen()),
-                        ),
-                        _ToolItem(
-                          icon: Icons.event,
-                          label: 'Events',
-                          color: const Color(0xff0f766e),
-                          onTap: () => open(context, const EventsScreen()),
-                        ),
-                        _ToolItem(
-                          icon: Icons.map,
-                          label: 'Navigation',
-                          color: const Color(0xff7c3aed),
-                          onTap: () => open(context, const LocationsScreen()),
-                        ),
-                        _ToolItem(
-                          icon: Icons.smart_toy,
-                          label: 'Canva',
-                          color: const Color(0xffec4899),
-                          onTap: () => open(context, const AIAgentScreen()),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                // ---- Role workspace ----
-                _sectionTitle(
-                  context,
-                  'Role Workspace',
-                  isAdmin ? 'Admin' : 'Proposal',
-                  () => open(
-                    context,
-                    isAdmin
-                        ? const AdminPanelScreen()
-                        : const EventProposalScreen(),
-                  ),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 96),
-                  sliver: SliverGrid(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                          childAspectRatio: 1.18,
-                        ),
-                    delegate: SliverChildListDelegate([
-                      DashboardCard(
-                        icon: Icons.assignment_add,
-                        title: 'Event Proposal',
-                        subtitle: 'Submit and track',
-                        color: const Color(0xff0891b2),
-                        onTap: () => open(context, const EventProposalScreen()),
-                      ),
-                      if (isEventAdmin)
-                        DashboardCard(
-                          icon: Icons.fact_check,
-                          title: 'Event Admin',
-                          subtitle: 'Review proposals',
-                          color: const Color(0xff9333ea),
-                          onTap: () =>
-                              open(context, const EventAdminPanelScreen()),
-                        ),
-                      if (isAdmin)
-                        DashboardCard(
-                          icon: Icons.admin_panel_settings,
-                          title: 'Main Admin',
-                          subtitle: 'Full management',
-                          color: const Color(0xff0f172a),
-                          onTap: () => open(context, const AdminPanelScreen()),
-                        ),
-                    ]),
-                  ),
-                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 96)),
               ],
             ),
           ),
@@ -1107,119 +985,146 @@ class _AnnouncementsPreview extends StatelessWidget {
   }
 }
 
-class _CompactTools extends StatelessWidget {
-  final List<_ToolItem> tools;
-  const _CompactTools({required this.tools});
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: tools
-          .map(
-            (tool) => SizedBox(
-              width: 112,
-              child: Material(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: tool.onTap,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 14,
-                    ),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0xffe2e8f0)),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 42,
-                          height: 42,
-                          decoration: BoxDecoration(
-                            color: tool.color.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Icon(tool.icon, color: tool.color),
-                        ),
-                        const SizedBox(height: 9),
-                        Text(
-                          tool.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          )
-          .toList(),
-    );
-  }
-}
-
-class _ToolItem {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  const _ToolItem({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-}
-
-class _MyCoursesStrip extends StatelessWidget {
+/// Merged "what's new" feed: recent announcements + upcoming course reminders,
+/// newest first.
+class _WhatsNewFeed extends StatelessWidget {
   final FirestoreService service;
   final String userId;
-  const _MyCoursesStrip({required this.service, required this.userId});
+  const _WhatsNewFeed({required this.service, required this.userId});
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: service.streamUserTimetable(userId),
-      builder: (context, snapshot) {
-        final courses = coursesFromTimetable(snapshot.data?.docs ?? []);
-        if (courses.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.fromLTRB(18, 10, 18, 0),
-            child: _EmptyCard(
-              icon: Icons.school,
-              text: 'Upload your timetable to see your course cards here.',
-            ),
-          );
-        }
-        return SizedBox(
-          height: 150,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(18, 10, 8, 0),
-            itemCount: courses.length,
-            itemBuilder: (context, i) => SizedBox(
-              width: 150,
-              child: Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: CourseCard(course: courses[i]),
+      stream: service.streamCollection(
+        'announcements',
+        orderBy: 'createdAt',
+        descending: true,
+      ),
+      builder: (context, annSnap) {
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: service.streamUserReminders(userId),
+          builder: (context, remSnap) {
+            final items = <_FeedItem>[];
+
+            for (final doc in annSnap.data?.docs ?? []) {
+              final d = doc.data();
+              final code = (d['courseCode'] ?? '').toString();
+              items.add(_FeedItem(
+                icon: Icons.campaign,
+                color: (d['priority'] ?? '') == 'high'
+                    ? const Color(0xffef4444)
+                    : const Color(0xff2563eb),
+                title: (d['title'] ?? 'Announcement').toString(),
+                subtitle: code.isEmpty
+                    ? (d['category'] ?? 'Campus').toString()
+                    : '${CourseUtils.baseCode(code)} · ${d['category'] ?? 'Course'}',
+                when: _dashboardDate(d['createdAt']),
+              ));
+            }
+
+            final today = DateTime.now();
+            final start = DateTime(today.year, today.month, today.day);
+            for (final doc in remSnap.data?.docs ?? []) {
+              final d = doc.data();
+              final date = _dashboardDate(d['reminderDate']);
+              if (date == null || date.isBefore(start)) continue;
+              items.add(_FeedItem(
+                icon: Icons.assignment_turned_in,
+                color: const Color(0xfff97316),
+                title: (d['title'] ?? 'Task due').toString(),
+                subtitle:
+                    'Due ${d['reminderDate'] ?? ''} ${d['reminderTime'] ?? ''}'
+                        .trim(),
+                when: date,
+              ));
+            }
+
+            items.sort((a, b) {
+              final at = a.when ?? DateTime(1970);
+              final bt = b.when ?? DateTime(1970);
+              return bt.compareTo(at);
+            });
+
+            if (items.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.fromLTRB(18, 10, 18, 0),
+                child: _EmptyCard(
+                  icon: Icons.notifications_none,
+                  text: 'Nothing new right now. Updates will appear here.',
+                ),
+              );
+            }
+
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
+              child: Column(
+                children: items.take(5).map((item) {
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xffe2e8f0)),
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 18,
+                          backgroundColor: item.color.withValues(alpha: 0.12),
+                          child: Icon(item.icon, size: 18, color: item.color),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              Text(
+                                item.subtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Color(0xff64748b),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
   }
+}
+
+class _FeedItem {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final DateTime? when;
+  const _FeedItem({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.when,
+  });
 }
 
 class _DueSoon extends StatelessWidget {

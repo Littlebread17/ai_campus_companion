@@ -70,7 +70,7 @@ class AIAgentService {
 
     return const AIAgentReply(
       text:
-          'I can help with campus tasks only. Try: "Canva, set a reminder for 20 Jun 10 pm ITM3206 test" or "What should I do this week?"',
+          'I can help with campus tasks only. Try: "Canva, set a reminder for my assignment tomorrow 10 pm" or "What should I do this week?"',
     );
   }
 

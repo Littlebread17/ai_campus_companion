@@ -574,7 +574,7 @@ class _AIAgentScreenState extends State<AIAgentScreen> {
   }
 
   List<String> get _examples => const [
-    'Canva, set a reminder for 20 Jun 10 pm ITM3206 class test',
+    'Canva, set a reminder for my assignment tomorrow 10 pm',
     'What should I do this week?',
     'Show my upcoming due dates this week',
     'Open Canvas LMS',

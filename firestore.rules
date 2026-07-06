@@ -93,12 +93,55 @@ service cloud.firestore {
     match /timetable/{entryId} {
       allow read: if signedIn() &&
         (resource.data.userId == request.auth.uid || isAdmin());
-      allow write: if isAdmin();
+      // Students may manage their own timetable rows (self-upload / edit);
+      // admins may manage any.
+      allow create: if isAdmin() ||
+        (signedIn() && request.resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin() ||
+        (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    // Personal calendar events the student creates (meetings, study, etc.).
+    match /calendarEvents/{eventId} {
+      allow read, update, delete: if signedIn() &&
+        resource.data.userId == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+    }
+
+    // Grades / results the student records for CGPA tracking.
+    match /grades/{gradeId} {
+      allow read, update, delete: if signedIn() &&
+        resource.data.userId == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+    }
+
+    // Student feedback: a student submits their own; admins read everything.
+    match /feedback/{feedbackId} {
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin() ||
+        (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // Per-student course preferences (nickname, colour, hidden, last read).
+    match /coursePrefs/{prefId} {
+      allow read, update, delete: if signedIn() &&
+        resource.data.userId == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
     }
 
     match /resources/{resourceId} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      // Admins manage shared resources; students may manage their own
+      // auto-generated / personal course materials (userId == their uid).
+      allow create: if isAdmin() ||
+        (signedIn() && request.resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin() ||
+        (signedIn() && resource.data.userId == request.auth.uid);
     }
 
     match /locations/{locationId} {

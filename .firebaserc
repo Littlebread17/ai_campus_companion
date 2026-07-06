@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "firebase deploy --only firestore:rules": "ai-campus-companion-413c3"
+  },
+  "targets": {},
+  "etags": {}
+}

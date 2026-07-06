@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/firestore_service.dart';
 import '../utils/course_utils.dart';
 import 'courses_screen.dart';
+import 'my_results_screen.dart';
 
 class CourseDetailScreen extends StatelessWidget {
   final StudentCourse course;
@@ -22,7 +23,7 @@ class CourseDetailScreen extends StatelessWidget {
     final service = FirestoreService();
 
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           backgroundColor: course.color,
@@ -38,6 +39,7 @@ class CourseDetailScreen extends StatelessWidget {
               Tab(text: 'Announcements'),
               Tab(text: 'Due dates'),
               Tab(text: 'Schedule'),
+              Tab(text: 'Grade'),
             ],
           ),
         ),
@@ -76,6 +78,7 @@ class CourseDetailScreen extends StatelessWidget {
                   _announcements(service),
                   _dueDates(service, userId),
                   _schedule(service, userId),
+                  _grade(context, service, userId),
                 ],
               ),
             ),
@@ -235,6 +238,79 @@ class CourseDetailScreen extends StatelessWidget {
               ),
             );
           }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _grade(
+    BuildContext context,
+    FirestoreService service,
+    String userId,
+  ) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: service.streamUserGrades(userId),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final match = snapshot.data!.docs.where(
+          (d) => _matchesCourse(d.data()['courseCode']?.toString()),
+        );
+        final open = TextButton.icon(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const MyResultsScreen()),
+          ),
+          icon: const Icon(Icons.open_in_new),
+          label: const Text('Open My Results'),
+        );
+
+        if (match.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No grade recorded for this course yet.',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                open,
+              ],
+            ),
+          );
+        }
+
+        final g = match.first.data();
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                radius: 44,
+                backgroundColor: course.color,
+                child: Text(
+                  (g['grade'] ?? '?').toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 30,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '${((g['gradePoint'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)} grade points',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              Text('${g['creditHours'] ?? 0} credit hours'),
+              const SizedBox(height: 12),
+              open,
+            ],
+          ),
         );
       },
     );
