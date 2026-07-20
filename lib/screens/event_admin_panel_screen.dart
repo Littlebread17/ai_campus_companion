@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/firestore_service.dart';
+import '../widgets/event_poster.dart';
+import 'create_event_screen.dart';
 
 class EventAdminPanelScreen extends StatelessWidget {
   const EventAdminPanelScreen({super.key});
@@ -61,6 +63,14 @@ class EventAdminPanelScreen extends StatelessWidget {
     final service = FirestoreService();
     return Scaffold(
       appBar: AppBar(title: const Text('Event Admin Panel')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const CreateEventScreen()),
+        ),
+        icon: const Icon(Icons.add),
+        label: const Text('Create event'),
+      ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: service.streamEventProposals(),
         builder: (context, snapshot) {
@@ -86,6 +96,9 @@ class EventAdminPanelScreen extends StatelessWidget {
               final doc = docs[index];
               final data = doc.data();
               final url = (data['proposalPdfUrl'] ?? '').toString();
+              final posterUrl = (data['posterUrl'] ?? '').toString();
+              final eventDate = (data['eventDate'] ?? '-').toString();
+              final eventEndDate = (data['eventEndDate'] ?? '').toString();
               return Card(
                 child: ExpansionTile(
                   leading: const Icon(Icons.fact_check, color: Colors.purple),
@@ -99,9 +112,21 @@ class EventAdminPanelScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          if (posterUrl.isNotEmpty) ...[
+                            EventPoster(
+                              title: (data['title'] ?? 'Event').toString(),
+                              posterUrl: posterUrl,
+                              height: 170,
+                              borderRadius: 6,
+                              showOverlayText: false,
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                           Text(data['description'] ?? ''),
                           const SizedBox(height: 8),
-                          Text('Date: ${data['eventDate'] ?? '-'}'),
+                          Text(
+                            'Date: $eventDate${eventEndDate.isEmpty ? '' : ' - $eventEndDate'}',
+                          ),
                           Text('Venue: ${data['venue'] ?? '-'}'),
                           Text('Contact: ${data['contactPerson'] ?? '-'}'),
                           if (url.isNotEmpty)

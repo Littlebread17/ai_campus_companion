@@ -23,7 +23,7 @@ class CampusTab extends StatelessWidget {
         crossAxisCount: 2,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
-        childAspectRatio: 1.15,
+        childAspectRatio: 1.05,
         children: [
           DashboardCard(
             icon: Icons.navigation,

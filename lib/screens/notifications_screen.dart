@@ -22,7 +22,10 @@ class NotificationsScreen extends StatelessWidget {
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          final docs = snapshot.data!.docs;
+          final docs = snapshot.data!.docs.where((doc) {
+            final targetUserId = (doc.data()['targetUserId'] ?? '').toString();
+            return targetUserId.isEmpty || targetUserId == userId;
+          }).toList();
           if (docs.isEmpty) {
             return const Center(child: Text('No notifications yet.'));
           }

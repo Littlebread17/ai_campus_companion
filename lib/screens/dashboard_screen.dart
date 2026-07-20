@@ -5,11 +5,16 @@ import 'package:intl/intl.dart';
 
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_theme.dart';
 import '../utils/course_utils.dart';
+import '../widgets/event_poster.dart';
+import '../widgets/ui_kit.dart';
 import 'admin_panel_screen.dart';
 import 'announcements_screen.dart';
 import 'calendar_screen.dart';
-import 'reminders_screen.dart';
+import 'event_detail_screen.dart';
+import 'events_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -43,7 +48,7 @@ class DashboardScreen extends StatelessWidget {
         final isAdmin = role == 'admin';
 
         return Scaffold(
-          backgroundColor: const Color(0xfff6f8ff),
+          backgroundColor: AppColors.background,
           body: SafeArea(
             child: CustomScrollView(
               slivers: [
@@ -65,11 +70,11 @@ class DashboardScreen extends StatelessWidget {
                   child: _SummaryChips(service: service, userId: userId),
                 ),
 
-                // ---- Calendar planner ----
+                // ---- Today ----
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
-                    child: _DashboardCalendarPlanner(
+                    padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+                    child: _TodayCard(
                       service: service,
                       userId: userId,
                       onOpenCalendar: () =>
@@ -89,12 +94,21 @@ class DashboardScreen extends StatelessWidget {
                   child: _WhatsNewFeed(service: service, userId: userId),
                 ),
 
+                // ---- Featured events ----
+                _sectionTitle(
+                  context,
+                  'Featured Events',
+                  'See all',
+                  () => open(context, const EventsScreen()),
+                ),
+                SliverToBoxAdapter(child: _FeaturedEvents(service: service)),
+
                 // ---- Due soon ----
                 _sectionTitle(
                   context,
                   'Due Soon',
                   'Reminders',
-                  () => open(context, const RemindersScreen()),
+                  () => open(context, const CalendarScreen(initialTab: 2)),
                 ),
                 SliverToBoxAdapter(
                   child: _DueSoon(service: service, userId: userId),
@@ -174,11 +188,12 @@ class _Header extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xff2563eb), Color(0xff7c3aed), Color(0xff06b6d4)],
+          colors: [AppColors.primary, AppColors.secondary, AppColors.tertiary],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(AppTheme.prominentRadius),
+        boxShadow: AppTheme.softShadow,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -191,7 +206,7 @@ class _Header extends StatelessWidget {
                 child: Text(
                   name.isNotEmpty ? name[0].toUpperCase() : 'S',
                   style: const TextStyle(
-                    color: Color(0xff2563eb),
+                    color: AppColors.primary,
                     fontWeight: FontWeight.w900,
                     fontSize: 22,
                   ),
@@ -245,42 +260,6 @@ class _Header extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: const [
-              _HeaderBadge(icon: Icons.calendar_today, label: 'Planner'),
-              _HeaderBadge(icon: Icons.auto_awesome, label: 'AI support'),
-              _HeaderBadge(icon: Icons.school, label: 'Courses'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HeaderBadge extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  const _HeaderBadge({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: Colors.white),
-          const SizedBox(width: 6),
-          Text(label, style: const TextStyle(color: Colors.white)),
         ],
       ),
     );
@@ -390,6 +369,7 @@ class _SummaryChips extends StatelessWidget {
 
                 for (final doc in reminderSnap.data?.docs ?? []) {
                   final data = doc.data();
+                  if (data['done'] == true) continue; // match Calendar Tasks
                   final date = _dashboardDate(data['reminderDate']);
                   if (date == null) continue;
                   final day = DateTime(date.year, date.month, date.day);
@@ -501,126 +481,127 @@ class _SummaryPill extends StatelessWidget {
   }
 }
 
-class _DashboardCalendarPlanner extends StatefulWidget {
-  final FirestoreService service;
-  final String userId;
-  final VoidCallback onOpenCalendar;
-  const _DashboardCalendarPlanner({
+/// Compact "Today" card: today's classes + events + reminders, plus a one-line
+/// preview of tomorrow. Replaces the old 14-day picker (the Calendar tab now
+/// owns date browsing).
+class _TodayCard extends StatelessWidget {
+  const _TodayCard({
     required this.service,
     required this.userId,
     required this.onOpenCalendar,
   });
 
-  @override
-  State<_DashboardCalendarPlanner> createState() =>
-      _DashboardCalendarPlannerState();
-}
-
-class _DashboardCalendarPlannerState extends State<_DashboardCalendarPlanner> {
-  DateTime selected = DateTime.now();
+  final FirestoreService service;
+  final String userId;
+  final VoidCallback onOpenCalendar;
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: widget.service.streamUserTimetable(widget.userId),
+      stream: service.streamUserTimetable(userId),
       builder: (context, ttSnap) {
-        if (ttSnap.hasError) {
-          return const _InlineDashboardError(
-            message: 'Could not load timetable planner.',
-          );
-        }
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: widget.service.streamUserCalendarEvents(widget.userId),
+          stream: service.streamUserCalendarEvents(userId),
           builder: (context, evSnap) {
-            if (evSnap.hasError) {
-              return const _InlineDashboardError(
-                message: 'Could not load calendar planner.',
-              );
-            }
             return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: widget.service.streamUserReminders(widget.userId),
-              builder: (context, reminderSnap) {
-                if (reminderSnap.hasError) {
+              stream: service.streamUserReminders(userId),
+              builder: (context, remSnap) {
+                if (ttSnap.hasError || evSnap.hasError || remSnap.hasError) {
                   return const _InlineDashboardError(
-                    message: 'Could not load assignment planner.',
+                    message: 'Could not load your day.',
                   );
                 }
-                final allItems = _buildDashboardItems(
+                final all = _buildItems(
                   ttSnap.data?.docs ?? [],
                   evSnap.data?.docs ?? [],
-                  reminderSnap.data?.docs ?? [],
+                  remSnap.data?.docs ?? [],
                 );
-                final selectedItems =
-                    allItems
-                        .where(
-                          (item) => DateUtils.isSameDay(item.date, selected),
-                        )
-                        .toList()
+                final now = DateTime.now();
+                final tomorrow = now.add(const Duration(days: 1));
+                final todayItems =
+                    all.where((i) => DateUtils.isSameDay(i.date, now)).toList()
                       ..sort((a, b) => a.start.compareTo(b.start));
+                final tomorrowCount = all
+                    .where((i) => DateUtils.isSameDay(i.date, tomorrow))
+                    .length;
 
-                return Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(color: const Color(0xffe2e8f0)),
-                    boxShadow: const [
-                      BoxShadow(color: Color(0x0f000000), blurRadius: 12),
-                    ],
-                  ),
+                return AppCard(
+                  padding: const EdgeInsets.all(16),
+                  onTap: onOpenCalendar,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          const Expanded(
-                            child: Text(
-                              'Calendar',
-                              style: TextStyle(
-                                fontSize: 19,
-                                fontWeight: FontWeight.w900,
-                              ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Today',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                Text(
+                                  DateFormat('EEEE, d MMM').format(now),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          TextButton(
-                            onPressed: widget.onOpenCalendar,
-                            child: const Text('Open'),
+                          const Icon(
+                            Icons.chevron_right,
+                            color: AppColors.faint,
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      _TwoWeekDashboardRow(
-                        selected: selected,
-                        items: allItems,
-                        onSelect: (day) => setState(() => selected = day),
-                      ),
-                      const SizedBox(height: 14),
-                      Text(
-                        _selectedTitle(selected),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (selectedItems.isEmpty)
+                      const SizedBox(height: 12),
+                      if (todayItems.isEmpty)
                         const _EmptyCard(
                           icon: Icons.free_breakfast,
-                          text:
-                              'No classes, assignments, or events for this day.',
+                          text: 'Nothing scheduled today. Enjoy the free day.',
                         )
                       else
-                        ...selectedItems
+                        ...todayItems
                             .take(4)
-                            .map((item) => _DashboardPlanTile(item: item)),
-                      if (selectedItems.length > 4)
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
-                            onPressed: widget.onOpenCalendar,
-                            child: Text('View all ${selectedItems.length}'),
+                            .map((i) => _DashboardPlanTile(item: i)),
+                      if (todayItems.length > 4)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            '+ ${todayItems.length - 4} more today',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
+                      const Divider(height: 20),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.wb_twilight,
+                            size: 16,
+                            color: AppColors.muted,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            tomorrowCount == 0
+                                ? 'Tomorrow · nothing scheduled'
+                                : 'Tomorrow · $tomorrowCount item${tomorrowCount == 1 ? '' : 's'}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 );
@@ -632,14 +613,15 @@ class _DashboardCalendarPlannerState extends State<_DashboardCalendarPlanner> {
     );
   }
 
-  List<_DashboardDayItem> _buildDashboardItems(
+  List<_DashboardDayItem> _buildItems(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> timetableDocs,
     List<QueryDocumentSnapshot<Map<String, dynamic>>> eventDocs,
     List<QueryDocumentSnapshot<Map<String, dynamic>>> reminderDocs,
   ) {
     final today = DateTime.now();
     final start = DateTime(today.year, today.month, today.day);
-    final days = List.generate(14, (index) => start.add(Duration(days: index)));
+    // Only need today + tomorrow.
+    final days = [start, start.add(const Duration(days: 1))];
     final items = <_DashboardDayItem>[];
 
     for (final doc in timetableDocs) {
@@ -675,7 +657,7 @@ class _DashboardCalendarPlannerState extends State<_DashboardCalendarPlanner> {
           title: (data['title'] ?? 'Event').toString(),
           subtitle: (data['location'] ?? data['type'] ?? 'Personal').toString(),
           type: 'Event',
-          color: const Color(0xff7c3aed),
+          color: AppColors.eventColor,
           icon: Icons.event,
         ),
       );
@@ -683,6 +665,7 @@ class _DashboardCalendarPlannerState extends State<_DashboardCalendarPlanner> {
 
     for (final doc in reminderDocs) {
       final data = doc.data();
+      if (data['done'] == true) continue;
       final date = _dashboardDate(data['reminderDate']);
       if (date == null) continue;
       items.add(
@@ -693,118 +676,13 @@ class _DashboardCalendarPlannerState extends State<_DashboardCalendarPlanner> {
           subtitle: (data['courseCode'] ?? 'Reminder').toString(),
           type: 'Task',
           color: date.isBefore(start)
-              ? const Color(0xffef4444)
-              : const Color(0xfff97316),
+              ? AppColors.danger
+              : AppColors.reminderColor,
           icon: Icons.assignment_turned_in,
         ),
       );
     }
     return items;
-  }
-
-  String _selectedTitle(DateTime value) {
-    final today = DateTime.now();
-    if (DateUtils.isSameDay(value, today)) {
-      return 'Today - ${DateFormat('d MMM').format(value)}';
-    }
-    if (DateUtils.isSameDay(value, today.add(const Duration(days: 1)))) {
-      return 'Tomorrow - ${DateFormat('d MMM').format(value)}';
-    }
-    return DateFormat('EEEE, d MMM').format(value);
-  }
-}
-
-class _TwoWeekDashboardRow extends StatelessWidget {
-  final DateTime selected;
-  final List<_DashboardDayItem> items;
-  final ValueChanged<DateTime> onSelect;
-  const _TwoWeekDashboardRow({
-    required this.selected,
-    required this.items,
-    required this.onSelect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final today = DateTime.now();
-    final start = DateTime(today.year, today.month, today.day);
-    final days = List.generate(14, (index) => start.add(Duration(days: index)));
-
-    return SizedBox(
-      height: 88,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: days.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final day = days[index];
-          final isSelected = DateUtils.isSameDay(day, selected);
-          final isToday = DateUtils.isSameDay(day, today);
-          final count = items
-              .where((item) => DateUtils.isSameDay(item.date, day))
-              .length;
-          return InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () => onSelect(day),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              width: 58,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? const Color(0xff2563eb)
-                    : const Color(0xfff8fbff),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: isToday
-                      ? const Color(0xff2563eb)
-                      : const Color(0xffe2e8f0),
-                  width: isToday ? 2 : 1,
-                ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    DateFormat('E').format(day),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isSelected
-                          ? Colors.white70
-                          : const Color(0xff64748b),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${day.day}',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                      color: isSelected
-                          ? Colors.white
-                          : const Color(0xff0f172a),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    width: 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      color: count > 0
-                          ? (isSelected
-                                ? Colors.white
-                                : const Color(0xfff97316))
-                          : Colors.transparent,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
   }
 }
 
@@ -1009,34 +887,39 @@ class _WhatsNewFeed extends StatelessWidget {
             for (final doc in annSnap.data?.docs ?? []) {
               final d = doc.data();
               final code = (d['courseCode'] ?? '').toString();
-              items.add(_FeedItem(
-                icon: Icons.campaign,
-                color: (d['priority'] ?? '') == 'high'
-                    ? const Color(0xffef4444)
-                    : const Color(0xff2563eb),
-                title: (d['title'] ?? 'Announcement').toString(),
-                subtitle: code.isEmpty
-                    ? (d['category'] ?? 'Campus').toString()
-                    : '${CourseUtils.baseCode(code)} · ${d['category'] ?? 'Course'}',
-                when: _dashboardDate(d['createdAt']),
-              ));
+              items.add(
+                _FeedItem(
+                  icon: Icons.campaign,
+                  color: (d['priority'] ?? '') == 'high'
+                      ? const Color(0xffef4444)
+                      : const Color(0xff2563eb),
+                  title: (d['title'] ?? 'Announcement').toString(),
+                  subtitle: code.isEmpty
+                      ? (d['category'] ?? 'Campus').toString()
+                      : '${CourseUtils.baseCode(code)} · ${d['category'] ?? 'Course'}',
+                  when: _dashboardDate(d['createdAt']),
+                ),
+              );
             }
 
             final today = DateTime.now();
             final start = DateTime(today.year, today.month, today.day);
             for (final doc in remSnap.data?.docs ?? []) {
               final d = doc.data();
+              if (d['done'] == true) continue; // match Calendar Tasks
               final date = _dashboardDate(d['reminderDate']);
               if (date == null || date.isBefore(start)) continue;
-              items.add(_FeedItem(
-                icon: Icons.assignment_turned_in,
-                color: const Color(0xfff97316),
-                title: (d['title'] ?? 'Task due').toString(),
-                subtitle:
-                    'Due ${d['reminderDate'] ?? ''} ${d['reminderTime'] ?? ''}'
-                        .trim(),
-                when: date,
-              ));
+              items.add(
+                _FeedItem(
+                  icon: Icons.assignment_turned_in,
+                  color: const Color(0xfff97316),
+                  title: (d['title'] ?? 'Task due').toString(),
+                  subtitle:
+                      'Due ${d['reminderDate'] ?? ''} ${d['reminderTime'] ?? ''}'
+                          .trim(),
+                  when: date,
+                ),
+              );
             }
 
             items.sort((a, b) {
@@ -1146,6 +1029,7 @@ class _DueSoon extends StatelessWidget {
         final start = DateTime(today.year, today.month, today.day);
         final rows =
             (snapshot.data?.docs ?? []).map((d) => d.data()).where((d) {
+              if (d['done'] == true) return false; // match Calendar Tasks
               final date = _dashboardDate(d['reminderDate']);
               return date != null && !date.isBefore(start);
             }).toList()..sort((a, b) {
@@ -1209,6 +1093,114 @@ class _EmptyCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Horizontal carousel of upcoming published events for the home page.
+class _FeaturedEvents extends StatelessWidget {
+  const _FeaturedEvents({required this.service});
+
+  final FirestoreService service;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: service.streamCollection('events'),
+      builder: (context, snap) {
+        if (!snap.hasData) {
+          return const SizedBox(
+            height: 200,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final events =
+            snap.data!.docs
+                .where(
+                  (d) => (d.data()['status'] ?? 'published') == 'published',
+                )
+                .toList()
+              ..sort(
+                (a, b) => '${a.data()['eventDate'] ?? ''}'.compareTo(
+                  '${b.data()['eventDate'] ?? ''}',
+                ),
+              );
+        if (events.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+            child: Text(
+              'No upcoming events yet.',
+              style: TextStyle(color: Color(0xff94a3b8)),
+            ),
+          );
+        }
+        return SizedBox(
+          height: 232,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            itemCount: events.length,
+            itemBuilder: (context, i) {
+              final doc = events[i];
+              final data = doc.data();
+              return GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => EventDetailScreen(eventId: doc.id),
+                  ),
+                ),
+                child: Container(
+                  width: 260,
+                  margin: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xffe2e8f0)),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      EventPoster(
+                        title: (data['title'] ?? 'Event').toString(),
+                        host: (data['clubName'] ?? '').toString(),
+                        posterUrl: (data['posterUrl'] ?? '').toString(),
+                        height: 120,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              (data['title'] ?? 'Event').toString(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${data['eventDate'] ?? '-'} · ${data['startTime'] ?? ''}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xff64748b),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
+import '../theme/app_theme.dart';
+
 class DashboardCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -13,23 +16,30 @@ class DashboardCard extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.onTap,
-    this.color = Colors.blue,
+    this.color = AppColors.primary,
   });
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(8),
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
         onTap: onTap,
         child: Container(
           constraints: const BoxConstraints(minHeight: 118),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xffdfe7f3)),
+            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+            border: Border.all(color: AppColors.border),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.ink.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -40,7 +50,7 @@ class DashboardCard extends StatelessWidget {
                 height: 40,
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(AppTheme.controlRadius),
                 ),
                 child: Icon(icon, size: 22, color: color),
               ),
@@ -61,7 +71,7 @@ class DashboardCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 12,
-                  color: Color(0xff64748b),
+                  color: AppColors.muted,
                   height: 1.2,
                 ),
               ),

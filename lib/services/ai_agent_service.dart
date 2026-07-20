@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'firestore_service.dart';
 import 'iu_digital_hub_service.dart';
+import '../utils/location_search.dart';
 
 enum AgentNavigationTarget {
   announcements,
@@ -10,6 +11,30 @@ enum AgentNavigationTarget {
   reminders,
   locations,
   events,
+}
+
+const _timetableWeekdays = [
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+];
+
+String? timetableDayFromQuery(String query, DateTime now) {
+  final lower = query.toLowerCase();
+  if (lower.contains('tomorrow')) {
+    return _timetableWeekdays[now.weekday % DateTime.daysPerWeek];
+  }
+  if (lower.contains('today')) {
+    return _timetableWeekdays[now.weekday - 1];
+  }
+  for (final day in _timetableWeekdays) {
+    if (lower.contains(day.toLowerCase())) return day;
+  }
+  return null;
 }
 
 class AIAgentReply {
@@ -65,7 +90,9 @@ class AIAgentService {
     if (_isLocationIntent(lower)) return await _searchLocations(input);
     if (_isAnnouncementIntent(lower)) return await _getAnnouncements();
     if (_isEventIntent(lower)) return await _getEvents();
-    if (_isTimetableIntent(lower)) return await _getTimetable(userId);
+    if (_isTimetableIntent(lower)) {
+      return await _getTimetable(userId, query: input);
+    }
     if (_isShowReminderIntent(lower)) return await _getReminders(userId);
 
     return const AIAgentReply(
@@ -115,28 +142,36 @@ class AIAgentService {
   }
 
   bool _isReminderIntent(String t) {
-    return t.contains('remind me') ||
-        t.contains('set reminder') ||
-        t.contains('create reminder') ||
-        t.contains('add reminder') ||
-        t.contains('set alarm') ||
-        (t.contains('calendar') &&
-            (t.contains('add') || t.contains('set') || t.contains('create')));
+    if (RegExp(r'\bremind\s+me\b').hasMatch(t)) return true;
+    if (RegExp(
+      r'\b(set|create|add|make|schedule)\s+(a\s+|an\s+|the\s+|my\s+)?(reminder|alarm)\b',
+    ).hasMatch(t))
+      return true;
+    if (t.contains('calendar') &&
+        RegExp(r'\b(add|set|create|schedule)\b').hasMatch(t))
+      return true;
+    return false;
   }
 
   bool _isShowReminderIntent(String t) {
-    return t.contains('show reminder') ||
-        t.contains('my reminder') ||
-        t.contains('reminders');
+    if (RegExp(r'\b(show|list|view|see|check|what are)\b').hasMatch(t) &&
+        t.contains('reminder'))
+      return true;
+    if (RegExp(r'\bmy\s+reminders?\b').hasMatch(t)) return true;
+    return false;
   }
 
   bool _isWeeklyPlanningIntent(String t) {
-    return (t.contains('this week') || t.contains('upcoming')) &&
-        (t.contains('due') ||
-            t.contains('deadline') ||
-            t.contains('what should') ||
-            t.contains('what to do') ||
-            t.contains('plan'));
+    final weekScope =
+        t.contains('this week') || t.contains('upcoming') || t.contains('week');
+    final planCue =
+        t.contains('due') ||
+        t.contains('deadline') ||
+        t.contains('what should') ||
+        t.contains('what to do') ||
+        t.contains('plan') ||
+        t.contains('to do');
+    return weekScope && planCue;
   }
 
   bool _isResourceIntent(String t) {
@@ -179,7 +214,11 @@ class AIAgentService {
   bool _isTimetableIntent(String t) {
     return t.contains('timetable') ||
         t.contains('class schedule') ||
-        t.contains('lecture schedule');
+        t.contains('lecture schedule') ||
+        (RegExp(
+              r'\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+            ).hasMatch(t) &&
+            RegExp(r'\b(class|classes|lecture|lectures)\b').hasMatch(t));
   }
 
   Future<AIAgentReply> _createReminderFromText({
@@ -258,34 +297,70 @@ class AIAgentService {
 
   Future<AIAgentReply> _searchLocations(String input) async {
     final snapshot = await _db.collection('locations').get();
-    final lower = input.toLowerCase();
+    final query = locationQueryFromMessage(input);
+    final matches =
+        snapshot.docs
+            .map((doc) {
+              final data = doc.data();
+              final keywords = data['keywords'] is List
+                  ? (data['keywords'] as List).map((item) => item.toString())
+                  : const <String>[];
+              return (
+                doc: doc,
+                rank: locationMatchRank(query, [
+                  (data['name'] ?? '').toString(),
+                  (data['building'] ?? '').toString(),
+                  (data['room'] ?? '').toString(),
+                  ...keywords,
+                ]),
+              );
+            })
+            .where((item) => item.rank < 3)
+            .toList()
+          ..sort((a, b) => a.rank.compareTo(b.rank));
 
-    for (final doc in snapshot.docs) {
-      final data = doc.data();
-      final name = (data['name'] ?? '').toString().toLowerCase();
-      final building = (data['building'] ?? '').toString().toLowerCase();
-      final room = (data['room'] ?? '').toString().toLowerCase();
-      final keywords = List<String>.from(data['keywords'] ?? []);
-      final keywordMatch = keywords.any((k) => lower.contains(k.toLowerCase()));
-      if (lower.contains(name) ||
-          lower.contains(building) ||
-          lower.contains(room) ||
-          keywordMatch) {
+    final wantsDirections = RegExp(
+      r'\b(navigate|navigation|guide|directions?|take\s+me)\b',
+      caseSensitive: false,
+    ).hasMatch(input);
+    final actionLabel = wantsDirections
+        ? 'Start Navigation'
+        : 'Show Navigation';
+
+    if (matches.isNotEmpty) {
+      final bestRank = matches.first.rank;
+      final best = matches.where((item) => item.rank == bestRank).toList();
+      if (best.length == 1) {
+        final data = best.first.doc.data();
+        final name = (data['name'] ?? 'Location').toString();
         return AIAgentReply(
           text:
-              '${data['name'] ?? 'Location'}\nBuilding: ${data['building'] ?? '-'}\nLevel: ${data['level'] ?? '-'}\nRoom: ${data['room'] ?? '-'}\n\n${data['directionText'] ?? 'No direction available.'}',
+              '$name\nBuilding: ${data['building'] ?? '-'}\nLevel: ${data['level'] ?? '-'}\nRoom: ${data['room'] ?? '-'}\n\n${data['directionText'] ?? 'No direction available.'}',
           navigationTarget: AgentNavigationTarget.locations,
-          actionLabel: 'Open Navigation',
-          query: input,
+          actionLabel: actionLabel,
+          query: name,
         );
       }
+
+      final names = best
+          .take(5)
+          .map((item) => '- ${item.doc.data()['name'] ?? 'Location'}')
+          .join('\n');
+      return AIAgentReply(
+        text:
+            'I found several matching locations:\n$names\nSelect the exact destination.',
+        navigationTarget: AgentNavigationTarget.locations,
+        actionLabel: 'Choose Destination',
+        query: query,
+      );
     }
 
-    return const AIAgentReply(
+    return AIAgentReply(
       text:
-          'I could not find that campus location. Try asking: Where is Finance Office?',
+          'I could not confirm one exact location. Open Navigation to search for "$query".',
       navigationTarget: AgentNavigationTarget.locations,
-      actionLabel: 'Open Navigation',
+      actionLabel: 'Search Navigation',
+      query: query,
     );
   }
 
@@ -333,7 +408,7 @@ class AIAgentService {
     );
   }
 
-  Future<AIAgentReply> _getTimetable(String userId) async {
+  Future<AIAgentReply> _getTimetable(String userId, {String query = ''}) async {
     final snapshot = await _db
         .collection('timetable')
         .where('userId', isEqualTo: userId)
@@ -342,8 +417,38 @@ class AIAgentService {
       return const AIAgentReply(text: 'I could not find your timetable yet.');
     }
 
-    final buffer = StringBuffer('Your timetable:\n');
-    for (final doc in snapshot.docs) {
+    final requestedDay = timetableDayFromQuery(query, DateTime.now());
+    final matchingDocs = requestedDay == null
+        ? snapshot.docs
+        : snapshot.docs.where((doc) {
+            final day = (doc.data()['day'] ?? '').toString().trim();
+            return day.toLowerCase() == requestedDay.toLowerCase();
+          }).toList();
+
+    if (matchingDocs.isEmpty && requestedDay != null) {
+      final period = query.toLowerCase().contains('tomorrow')
+          ? 'tomorrow ($requestedDay)'
+          : query.toLowerCase().contains('today')
+          ? 'today ($requestedDay)'
+          : 'on $requestedDay';
+      return AIAgentReply(
+        text: 'You have no classes $period.',
+        navigationTarget: AgentNavigationTarget.timetable,
+        actionLabel: 'Open Timetable',
+      );
+    }
+
+    final period = requestedDay == null
+        ? null
+        : query.toLowerCase().contains('tomorrow')
+        ? 'tomorrow ($requestedDay)'
+        : query.toLowerCase().contains('today')
+        ? 'today ($requestedDay)'
+        : 'on $requestedDay';
+    final buffer = StringBuffer(
+      period == null ? 'Your timetable:\n' : 'Your classes $period:\n',
+    );
+    for (final doc in matchingDocs) {
       final data = doc.data();
       buffer.writeln(
         '- ${data['courseCode'] ?? ''} ${data['courseName'] ?? ''}: ${data['day'] ?? '-'} ${data['startTime'] ?? '-'}-${data['endTime'] ?? '-'} at ${data['room'] ?? '-'}',
@@ -354,6 +459,231 @@ class AIAgentService {
       navigationTarget: AgentNavigationTarget.timetable,
       actionLabel: 'Open Timetable',
     );
+  }
+
+  Future<AIAgentReply> updateReminderByQuery({
+    required String userId,
+    required String query,
+    String? newDate,
+    String? newTime,
+    String? newTitle,
+  }) async {
+    final match = await _findReminder(userId: userId, query: query);
+    if (match is _AmbiguousReminders) {
+      return AIAgentReply(text: _promptForNumberedChoice(match.docs, 'update'));
+    }
+    if (match is _NoReminder) {
+      return const AIAgentReply(
+        text:
+            'I could not find a reminder matching that. Try "show my reminders" first.',
+        navigationTarget: AgentNavigationTarget.reminders,
+        actionLabel: 'Open Reminders',
+      );
+    }
+    final doc = (match as _MatchedReminder).doc;
+    await _firestoreService.updateReminder(
+      reminderId: doc.id,
+      reminderDate: newDate,
+      reminderTime: newTime,
+      title: newTitle,
+    );
+    final data = doc.data();
+    final label = data['title'] ?? 'reminder';
+    return AIAgentReply(
+      text:
+          'Updated "$label"'
+          '${newDate != null ? ' to $newDate' : ''}'
+          '${newTime != null ? ' at $newTime' : ''}.',
+      navigationTarget: AgentNavigationTarget.reminders,
+      actionLabel: 'Open Reminders',
+    );
+  }
+
+  Future<AIAgentReply> deleteReminderByQuery({
+    required String userId,
+    required String query,
+  }) async {
+    final match = await _findReminder(userId: userId, query: query);
+    if (match is _AmbiguousReminders) {
+      return AIAgentReply(text: _promptForNumberedChoice(match.docs, 'delete'));
+    }
+    if (match is _NoReminder) {
+      return const AIAgentReply(
+        text: 'I could not find a reminder matching that.',
+        navigationTarget: AgentNavigationTarget.reminders,
+        actionLabel: 'Open Reminders',
+      );
+    }
+    final doc = (match as _MatchedReminder).doc;
+    final label = doc.data()['title'] ?? 'reminder';
+    await _firestoreService.deleteReminder(doc.id);
+    return AIAgentReply(
+      text: 'Deleted "$label".',
+      navigationTarget: AgentNavigationTarget.reminders,
+      actionLabel: 'Open Reminders',
+    );
+  }
+
+  Future<AIAgentReply> markReminderDoneByQuery({
+    required String userId,
+    required String query,
+  }) async {
+    final match = await _findReminder(userId: userId, query: query);
+    if (match is _AmbiguousReminders) {
+      return AIAgentReply(
+        text: _promptForNumberedChoice(match.docs, 'complete'),
+      );
+    }
+    if (match is _NoReminder) {
+      return const AIAgentReply(
+        text: 'I could not find a reminder matching that.',
+        navigationTarget: AgentNavigationTarget.reminders,
+        actionLabel: 'Open Reminders',
+      );
+    }
+    final doc = (match as _MatchedReminder).doc;
+    final label = doc.data()['title'] ?? 'reminder';
+    await _firestoreService.setReminderDone(doc.id, true);
+    return AIAgentReply(
+      text: 'Nice — marked "$label" as done.',
+      navigationTarget: AgentNavigationTarget.reminders,
+      actionLabel: 'Open Reminders',
+    );
+  }
+
+  Future<AIAgentReply> snoozeReminderByQuery({
+    required String userId,
+    required String query,
+    required int minutes,
+  }) async {
+    final match = await _findReminder(userId: userId, query: query);
+    if (match is _AmbiguousReminders) {
+      return AIAgentReply(text: _promptForNumberedChoice(match.docs, 'snooze'));
+    }
+    if (match is _NoReminder) {
+      return const AIAgentReply(
+        text: 'I could not find a reminder matching that.',
+        navigationTarget: AgentNavigationTarget.reminders,
+        actionLabel: 'Open Reminders',
+      );
+    }
+    final doc = (match as _MatchedReminder).doc;
+    final label = doc.data()['title'] ?? 'reminder';
+    final until = DateTime.now().add(Duration(minutes: minutes));
+    await _firestoreService.snoozeReminder(doc.id, until);
+    return AIAgentReply(
+      text: 'Snoozed "$label" for ${_humanizeMinutes(minutes)}.',
+      navigationTarget: AgentNavigationTarget.reminders,
+      actionLabel: 'Open Reminders',
+    );
+  }
+
+  /// Create a time-blocked calendar event (start–end) rather than a reminder.
+  Future<AIAgentReply> createEventFromText({
+    required String userId,
+    required String text,
+  }) async {
+    final courseCode = _extractCourseCode(text);
+    final date = _extractDate(text);
+    final startTime = _extractTime(text);
+    final endTime = _addHour(startTime);
+    final title = _buildReminderTitle(text, courseCode);
+    final type = _guessEventType(text);
+
+    await _firestoreService.addCalendarEvent(
+      userId: userId,
+      title: title,
+      date: date,
+      startTime: startTime,
+      endTime: endTime,
+      location: '',
+      type: type,
+      courseCode: courseCode,
+      notes: text,
+    );
+
+    final response = 'Added "$title" on $date from $startTime to $endTime.';
+    await _saveChat(
+      userId: userId,
+      userMessage: text,
+      detectedIntent: 'create_event',
+      agentAction: 'create_event',
+      aiResponse: response,
+    );
+    return AIAgentReply(
+      text: response,
+      navigationTarget: AgentNavigationTarget.reminders,
+      actionLabel: 'Open Calendar',
+    );
+  }
+
+  String _guessEventType(String text) {
+    final t = text.toLowerCase();
+    if (t.contains('meeting') || t.contains('meet')) return 'meeting';
+    if (t.contains('study') || t.contains('revision')) return 'study';
+    if (t.contains('assignment')) return 'assignment';
+    return 'personal';
+  }
+
+  String _addHour(String hm) {
+    final p = hm.split(':');
+    var h = int.tryParse(p.isNotEmpty ? p[0] : '9') ?? 9;
+    final m = int.tryParse(p.length > 1 ? p[1] : '0') ?? 0;
+    h = (h + 1) % 24;
+    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+  }
+
+  String _humanizeMinutes(int minutes) {
+    if (minutes % 1440 == 0) return '${minutes ~/ 1440} day(s)';
+    if (minutes % 60 == 0) return '${minutes ~/ 60} hour(s)';
+    return '$minutes minutes';
+  }
+
+  Future<_ReminderMatch> _findReminder({
+    required String userId,
+    required String query,
+  }) async {
+    final docs = await _firestoreService.fetchUserReminders(userId);
+    if (docs.isEmpty) return _NoReminder();
+    final q = query.toLowerCase().trim();
+    if (q.isEmpty) {
+      return docs.length == 1
+          ? _MatchedReminder(docs.first)
+          : _AmbiguousReminders(docs);
+    }
+    // If the student said "number 2" or "the second one"
+    final numMatch = RegExp(r'\b(\d+)\b').firstMatch(q);
+    if (numMatch != null) {
+      final idx = int.parse(numMatch.group(1)!) - 1;
+      if (idx >= 0 && idx < docs.length) return _MatchedReminder(docs[idx]);
+    }
+    final hits = docs.where((doc) {
+      final data = doc.data();
+      final title = (data['title'] ?? '').toString().toLowerCase();
+      final course = (data['courseCode'] ?? '').toString().toLowerCase();
+      final desc = (data['description'] ?? '').toString().toLowerCase();
+      return title.contains(q) || course.contains(q) || desc.contains(q);
+    }).toList();
+    if (hits.isEmpty) return _NoReminder();
+    if (hits.length == 1) return _MatchedReminder(hits.first);
+    return _AmbiguousReminders(hits);
+  }
+
+  String _promptForNumberedChoice(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    String verb,
+  ) {
+    final buffer = StringBuffer(
+      'I found more than one match. Which one should I $verb?\n',
+    );
+    for (var i = 0; i < docs.length && i < 8; i++) {
+      final data = docs[i].data();
+      buffer.writeln(
+        '${i + 1}. ${data['title'] ?? 'Reminder'} — ${data['reminderDate'] ?? '-'} ${data['reminderTime'] ?? ''}',
+      );
+    }
+    buffer.write('Reply with the number.');
+    return buffer.toString();
   }
 
   Future<AIAgentReply> _getReminders(String userId) async {
@@ -627,13 +957,35 @@ class AIAgentService {
     required String agentAction,
     required String aiResponse,
   }) async {
-    await _db.collection('chatHistory').add({
-      'userId': userId,
-      'userMessage': userMessage,
-      'detectedIntent': detectedIntent,
-      'agentAction': agentAction,
-      'aiResponse': aiResponse,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    try {
+      await _db.collection('chatHistory').add({
+        'userId': userId,
+        'userMessage': userMessage,
+        'detectedIntent': detectedIntent,
+        'agentAction': agentAction,
+        'aiResponse': aiResponse,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Chat logging is best-effort; never fail the user-visible reply on it.
+    }
   }
+}
+
+sealed class _ReminderMatch {
+  const _ReminderMatch();
+}
+
+class _NoReminder extends _ReminderMatch {
+  const _NoReminder();
+}
+
+class _MatchedReminder extends _ReminderMatch {
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+  const _MatchedReminder(this.doc);
+}
+
+class _AmbiguousReminders extends _ReminderMatch {
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs;
+  const _AmbiguousReminders(this.docs);
 }

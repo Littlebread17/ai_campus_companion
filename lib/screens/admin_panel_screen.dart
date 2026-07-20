@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+import '../services/demo_seeder_service.dart';
 import '../services/firestore_service.dart';
+import '../widgets/event_poster.dart';
+import 'proposal_pdf_screen.dart';
 
 class AdminPanelScreen extends StatefulWidget {
   const AdminPanelScreen({super.key});
@@ -14,6 +16,93 @@ class AdminPanelScreen extends StatefulWidget {
 
 class _AdminPanelScreenState extends State<AdminPanelScreen> {
   final service = FirestoreService();
+  final seeder = DemoSeederService();
+  bool _seeding = false;
+
+  Future<void> _seedDemo() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Seed demo data?'),
+        content: const Text(
+          'This will populate your account and the app with realistic demo '
+          'content — timetable, courses, announcements, events, resources, '
+          'notifications, calendar events and past-semester grades. '
+          'Running again just updates the same records.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Seed now'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _seeding = true);
+    try {
+      String name = user.email ?? 'Student';
+      try {
+        final profile = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        name = (profile.data()?['name'] ?? name).toString();
+      } catch (_) {}
+
+      final result = await seeder.seedAll(
+        userId: user.uid,
+        userName: name,
+        userEmail: user.email ?? '',
+      );
+
+      if (!mounted) return;
+      final summary = result.counts.entries
+          .map((e) => '${e.key}: ${e.value}')
+          .join('\n');
+      final accounts = DemoSeederService.demoAccounts
+          .map(
+            (a) =>
+                '${(a['role'] == 'admin' ? '[ADMIN] ' : '[STUDENT] ')}${a['email']}',
+          )
+          .join('\n');
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Demo data seeded'),
+          content: SingleChildScrollView(
+            child: Text(
+              '${result.elapsedMs} ms\n\n$summary\n\n'
+              'Pre-approved emails (create these in Firebase Auth to sign in):\n$accounts',
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Seeding failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _seeding = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -22,6 +111,22 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Main Admin Panel'),
+          actions: [
+            IconButton(
+              tooltip: 'Seed demo data',
+              onPressed: _seeding ? null : _seedDemo,
+              icon: _seeding
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.auto_fix_high),
+            ),
+          ],
           bottom: const TabBar(
             isScrollable: true,
             tabs: [
@@ -51,6 +156,43 @@ class _ApprovalsTab extends StatelessWidget {
   final FirestoreService service;
 
   const _ApprovalsTab({required this.service});
+
+  Future<void> _requestChanges(BuildContext context, String proposalId) async {
+    final remark = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Request Changes'),
+        content: TextField(
+          controller: remark,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            labelText: 'Tell the student what to change',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              if (remark.text.trim().isEmpty) return;
+              await service.adminRequestProposalChanges(
+                proposalId: proposalId,
+                remark: remark.text.trim(),
+                reviewedBy: FirebaseAuth.instance.currentUser?.uid ?? '',
+              );
+              if (context.mounted) Navigator.pop(context);
+            },
+            child: const Text('Send to Student'),
+          ),
+        ],
+      ),
+    );
+    remark.dispose();
+  }
 
   Future<void> _publish(
     BuildContext context,
@@ -112,9 +254,13 @@ class _ApprovalsTab extends StatelessWidget {
     remark.dispose();
   }
 
-  Future<void> _openPdf(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
+  void _openPdf(BuildContext context, String url, String fileName) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProposalPdfScreen(url: url, fileName: fileName),
+      ),
+    );
   }
 
   @override
@@ -128,12 +274,14 @@ class _ApprovalsTab extends StatelessWidget {
         }
         final docs = snapshot.data!.docs.where((doc) {
           final status = (doc.data()['status'] ?? '').toString();
-          return status == 'event_admin_checked' ||
+          return status == 'submitted' ||
+              status == 'needs_changes' ||
+              status == 'event_admin_checked' ||
               status == 'approved_published' ||
               status == 'admin_rejected';
         }).toList();
         if (docs.isEmpty) {
-          return const Center(child: Text('No proposals forwarded to admin.'));
+          return const Center(child: Text('No event proposals found.'));
         }
         return ListView.builder(
           padding: const EdgeInsets.all(16),
@@ -142,49 +290,133 @@ class _ApprovalsTab extends StatelessWidget {
             final doc = docs[index];
             final data = doc.data();
             final status = (data['status'] ?? '').toString();
-            final canPublish = status == 'event_admin_checked';
+            final statusLabel = switch (status) {
+              'submitted' => 'pending review',
+              'needs_changes' => 'pending edit',
+              'approved_published' => 'approved and published',
+              'admin_rejected' => 'rejected',
+              _ => status.replaceAll('_', ' '),
+            };
+            final isPendingReview =
+                status == 'submitted' || status == 'event_admin_checked';
             final pdfUrl = (data['proposalPdfUrl'] ?? '').toString();
+            final pdfFileName = (data['proposalFileName'] ?? 'Proposal.pdf')
+                .toString();
+            final canApprove = canApproveEventProposal(status, pdfUrl);
+            final posterUrl = (data['posterUrl'] ?? '').toString();
             return Card(
               child: ExpansionTile(
                 leading: const Icon(Icons.verified, color: Colors.green),
                 title: Text(data['title'] ?? 'Untitled proposal'),
-                subtitle: Text(
-                  '${data['clubName'] ?? '-'} - ${status.replaceAll('_', ' ')}',
-                ),
+                subtitle: Text('${data['clubName'] ?? '-'} - $statusLabel'),
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if (posterUrl.isNotEmpty) ...[
+                          EventPoster(
+                            title: (data['title'] ?? 'Event').toString(),
+                            posterUrl: posterUrl,
+                            height: 260,
+                            borderRadius: 6,
+                            showOverlayText: false,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                         Text(data['description'] ?? ''),
                         const SizedBox(height: 8),
-                        Text('Date: ${data['eventDate'] ?? '-'}'),
+                        Text('Student: ${data['studentName'] ?? '-'}'),
+                        Text(
+                          'Date: ${data['eventDate'] ?? '-'}${(data['eventEndDate'] ?? '').toString().isEmpty ? '' : ' - ${data['eventEndDate']}'}',
+                        ),
                         Text(
                           'Time: ${data['startTime'] ?? '-'}-${data['endTime'] ?? '-'}',
                         ),
                         Text('Venue: ${data['venue'] ?? '-'}'),
+                        Text('Contact: ${data['contactPerson'] ?? '-'}'),
                         Text(
                           'Event Admin remark: ${data['eventAdminRemark'] ?? '-'}',
                         ),
-                        if (pdfUrl.isNotEmpty)
-                          TextButton.icon(
-                            onPressed: () => _openPdf(pdfUrl),
-                            icon: const Icon(Icons.picture_as_pdf),
-                            label: const Text('Open proposal PDF'),
+                        Text(
+                          'Main Admin remark: ${data['mainAdminRemark'] ?? '-'}',
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: pdfUrl.isEmpty
+                                ? const Color(0xfffff7ed)
+                                : const Color(0xfff8fafc),
+                            border: Border.all(
+                              color: pdfUrl.isEmpty
+                                  ? const Color(0xfffb923c)
+                                  : const Color(0xffcbd5e1),
+                            ),
+                            borderRadius: BorderRadius.circular(6),
                           ),
-                        if (canPublish)
+                          child: Row(
+                            children: [
+                              Icon(
+                                pdfUrl.isEmpty
+                                    ? Icons.warning_amber
+                                    : Icons.picture_as_pdf,
+                                color: pdfUrl.isEmpty
+                                    ? const Color(0xffc2410c)
+                                    : const Color(0xffdc2626),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Proposal Document',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    Text(
+                                      pdfUrl.isEmpty
+                                          ? 'No proposal PDF uploaded'
+                                          : pdfFileName,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (pdfUrl.isNotEmpty)
+                                FilledButton.icon(
+                                  onPressed: () =>
+                                      _openPdf(context, pdfUrl, pdfFileName),
+                                  icon: const Icon(Icons.visibility),
+                                  label: const Text('View PDF'),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        if (isPendingReview)
                           Wrap(
                             spacing: 8,
+                            runSpacing: 8,
                             children: [
+                              OutlinedButton(
+                                onPressed: () =>
+                                    _requestChanges(context, doc.id),
+                                child: const Text('Request Changes'),
+                              ),
                               OutlinedButton(
                                 onPressed: () => _reject(context, doc.id),
                                 child: const Text('Reject'),
                               ),
                               FilledButton.icon(
-                                onPressed: () => _publish(context, doc),
+                                onPressed: canApprove
+                                    ? () => _publish(context, doc)
+                                    : null,
                                 icon: const Icon(Icons.publish),
-                                label: const Text('Publish Event'),
+                                label: const Text('Approve and Publish'),
                               ),
                             ],
                           ),
@@ -199,6 +431,11 @@ class _ApprovalsTab extends StatelessWidget {
       },
     );
   }
+}
+
+bool canApproveEventProposal(String status, String pdfUrl) {
+  return (status == 'submitted' || status == 'event_admin_checked') &&
+      pdfUrl.trim().isNotEmpty;
 }
 
 class _AnnouncementsAdminTab extends StatelessWidget {
@@ -483,6 +720,9 @@ class _LocationsAdminTab extends StatelessWidget {
       text: data['category'] ?? 'Facility',
     );
     final direction = TextEditingController(text: data['directionText'] ?? '');
+    final nearest = TextEditingController(
+      text: data['nearestTrainedPlace'] ?? '',
+    );
     final keywords = TextEditingController(
       text: (data['keywords'] is List)
           ? List<String>.from(data['keywords']).join(', ')
@@ -508,6 +748,7 @@ class _LocationsAdminTab extends StatelessWidget {
               _input(room, 'Room'),
               _input(category, 'Category'),
               _input(direction, 'Direction steps'),
+              _input(nearest, 'Nearest trained place (optional, e.g. A2-05)'),
               _input(keywords, 'Keywords, comma separated'),
               _input(latitude, 'Latitude (optional, e.g. 2.81380)'),
               _input(longitude, 'Longitude (optional, e.g. 101.78160)'),
@@ -532,6 +773,7 @@ class _LocationsAdminTab extends StatelessWidget {
                   category: category.text.trim(),
                   directionText: direction.text.trim(),
                   keywords: keywords.text.trim(),
+                  nearestTrainedPlace: nearest.text.trim(),
                   latitude: lat,
                   longitude: lng,
                 );
@@ -545,6 +787,7 @@ class _LocationsAdminTab extends StatelessWidget {
                   category: category.text.trim(),
                   directionText: direction.text.trim(),
                   keywords: keywords.text.trim(),
+                  nearestTrainedPlace: nearest.text.trim(),
                   latitude: lat,
                   longitude: lng,
                 );
@@ -563,6 +806,7 @@ class _LocationsAdminTab extends StatelessWidget {
       room,
       category,
       direction,
+      nearest,
       keywords,
       latitude,
       longitude,

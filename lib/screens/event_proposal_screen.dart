@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../services/firestore_service.dart';
 
@@ -28,6 +29,8 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
   final contact = TextEditingController();
 
   PlatformFile? selectedPdf;
+  XFile? selectedPoster;
+  String? existingPosterUrl;
   String? editingProposalId;
   String? existingPdfUrl;
   String? existingPdfFileName;
@@ -42,6 +45,15 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
     );
     if (result == null || result.files.isEmpty) return;
     setState(() => selectedPdf = result.files.single);
+  }
+
+  Future<void> pickPoster() async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1600,
+      imageQuality: 85,
+    );
+    if (picked != null) setState(() => selectedPoster = picked);
   }
 
   Future<void> submitProposal() async {
@@ -93,6 +105,20 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
         proposalFileName = selectedPdf!.name;
       }
 
+      // Optional event poster upload.
+      var posterUrl = existingPosterUrl ?? '';
+      if (selectedPoster != null) {
+        final bytes = await selectedPoster!.readAsBytes();
+        final posterRef = FirebaseStorage.instance.ref(
+          'event_posters/${user.uid}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        );
+        await posterRef.putData(
+          bytes,
+          SettableMetadata(contentType: 'image/jpeg'),
+        );
+        posterUrl = await posterRef.getDownloadURL();
+      }
+
       final profile = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -114,6 +140,7 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
           contactPerson: contact.text.trim(),
           proposalPdfUrl: proposalPdfUrl,
           proposalFileName: proposalFileName,
+          posterUrl: posterUrl,
         );
       } else {
         await service.submitEventProposal(
@@ -129,6 +156,7 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
           contactPerson: contact.text.trim(),
           proposalPdfUrl: proposalPdfUrl,
           proposalFileName: proposalFileName,
+          posterUrl: posterUrl,
         );
       }
 
@@ -149,6 +177,8 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
       c.clear();
     }
     selectedPdf = null;
+    selectedPoster = null;
+    existingPosterUrl = null;
     editingProposalId = null;
     existingPdfUrl = null;
     existingPdfFileName = null;
@@ -167,7 +197,9 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
       editingProposalId = proposalId;
       existingPdfUrl = (data['proposalPdfUrl'] ?? '').toString();
       existingPdfFileName = (data['proposalFileName'] ?? '').toString();
+      existingPosterUrl = (data['posterUrl'] ?? '').toString();
       selectedPdf = null;
+      selectedPoster = null;
     });
     if (pageScroll.hasClients) {
       pageScroll.animateTo(
@@ -256,6 +288,18 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
               selectedPdf?.name ?? existingPdfFileName ?? 'Upload proposal PDF',
             ),
           ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: isSubmitting ? null : pickPoster,
+            icon: const Icon(Icons.image),
+            label: Text(
+              selectedPoster != null
+                  ? 'Poster selected ✓'
+                  : (existingPosterUrl != null && existingPosterUrl!.isNotEmpty
+                        ? 'Change event poster'
+                        : 'Upload event poster (optional)'),
+            ),
+          ),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: isSubmitting ? null : submitProposal,
@@ -338,9 +382,19 @@ class _EventProposalScreenState extends State<EventProposalScreen> {
   }
 
   String _statusText(Object status) {
-    return status
-        .toString()
-        .replaceAll('_', ' ')
-        .replaceFirstMapped(RegExp(r'^\w'), (m) => m.group(0)!.toUpperCase());
+    return proposalStatusText(status);
   }
+}
+
+String proposalStatusText(Object status) {
+  return switch (status.toString()) {
+    'submitted' => 'Pending review',
+    'needs_changes' => 'Pending edit',
+    'approved_published' => 'Approved and published',
+    'admin_rejected' || 'event_admin_rejected' => 'Rejected',
+    final value =>
+      value
+          .replaceAll('_', ' ')
+          .replaceFirstMapped(RegExp(r'^\w'), (m) => m.group(0)!.toUpperCase()),
+  };
 }

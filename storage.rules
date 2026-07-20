@@ -39,6 +39,27 @@ service firebase.storage {
       allow delete: if isAdmin();
     }
 
+    // Chat image attachments. Any signed-in user may read (channel membership
+    // is enforced by Firestore for the message that references the URL) and
+    // upload reasonably-sized images.
+    match /chat_media/{channelId}/{fileName} {
+      allow read: if signedIn();
+      allow create: if signedIn() &&
+        request.resource.size < 8 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*');
+      allow delete: if isAdmin();
+    }
+
+    // Event posters. Anyone signed in can view; admins or the event's proposer
+    // may upload a reasonably-sized image.
+    match /event_posters/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() &&
+        request.resource.size < 8 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*');
+      allow delete: if isAdmin();
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

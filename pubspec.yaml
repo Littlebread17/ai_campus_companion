@@ -50,6 +50,14 @@ dependencies:
   flutter_compass: ^0.8.1
   image_picker: ^1.1.2
   google_mlkit_text_recognition: ^0.13.1
+  google_generative_ai: ^0.4.6
+  wifi_scan: ^0.4.1+2
+  permission_handler: ^11.3.1
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
+  flutter_timezone: ^3.0.1
+  share_plus: ^10.1.2
+  pdfrx: ^2.4.7
 
 dev_dependencies:
   flutter_test:
@@ -75,6 +83,8 @@ flutter:
 
   assets:
     - assets/images/campus_map.jpg
+    - assets/images/event_posters/
+    - assets/proposals/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

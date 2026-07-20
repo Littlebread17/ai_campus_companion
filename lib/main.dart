@@ -5,6 +5,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'screens/auth_wrapper.dart';
 import 'services/notification_service.dart';
+import 'services/reminder_scheduler.dart';
+import 'theme/app_theme.dart';
 import 'widgets/canva_bubble.dart';
 
 void main() async {
@@ -26,6 +28,8 @@ void main() async {
   // throw (missing service worker / VAPID key); we fire it without awaiting and
   // swallow errors so the UI always loads.
   unawaited(_initNotificationsSafely());
+  // Local reminder scheduler (mobile only; safe no-op on web).
+  unawaited(ReminderScheduler.instance.initialize());
 
   runApp(const AICampusCompanionApp());
 }
@@ -47,32 +51,10 @@ class AICampusCompanionApp extends StatelessWidget {
       title: 'AI Campus Companion',
       debugShowCheckedModeBanner: false,
       navigatorKey: rootNavigatorKey,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff2563eb),
-          primary: const Color(0xff2563eb),
-          secondary: const Color(0xff7c3aed),
-          tertiary: const Color(0xff06b6d4),
-          surface: Colors.white,
-        ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xfff6f8ff),
-        cardTheme: CardThemeData(
-          color: Colors.white,
-          elevation: 1.5,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-        ),
-      ),
+      theme: AppTheme.light,
       builder: (context, child) {
         // Overlay the always-available Canva chat bubble above every screen.
-        return Stack(
-          children: [
-            ?child,
-            const CanvaBubble(),
-          ],
-        );
+        return Stack(children: [?child, const CanvaBubble()]);
       },
       home: const AuthWrapper(),
     );

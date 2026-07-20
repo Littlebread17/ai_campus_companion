@@ -146,7 +146,7 @@ class FirestoreService {
         .snapshots();
   }
 
-  Future<void> addCalendarEvent({
+  Future<DocumentReference<Map<String, dynamic>>> addCalendarEvent({
     required String userId,
     required String title,
     required String date,
@@ -156,8 +156,10 @@ class FirestoreService {
     required String type,
     String courseCode = '',
     String notes = '',
+    String recurrence = 'none',
+    int leadTimeMinutes = 0,
   }) async {
-    await _db.collection('calendarEvents').add({
+    return _db.collection('calendarEvents').add({
       'userId': userId,
       'title': title,
       'date': date,
@@ -167,6 +169,8 @@ class FirestoreService {
       'type': type,
       'courseCode': courseCode,
       'notes': notes,
+      'recurrence': recurrence,
+      'leadTimeMinutes': leadTimeMinutes,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
@@ -182,6 +186,8 @@ class FirestoreService {
     required String type,
     String courseCode = '',
     String notes = '',
+    String recurrence = 'none',
+    int leadTimeMinutes = 0,
   }) async {
     await _db.collection('calendarEvents').doc(id).set({
       'title': title,
@@ -192,6 +198,8 @@ class FirestoreService {
       'type': type,
       'courseCode': courseCode,
       'notes': notes,
+      'recurrence': recurrence,
+      'leadTimeMinutes': leadTimeMinutes,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
@@ -335,18 +343,22 @@ class FirestoreService {
       ops.add((b) => b.delete(doc.reference));
     }
     for (final r in reminders) {
-      ops.add((b) => b.set(_db.collection('reminders').doc(), {
-            ...r,
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          }));
+      ops.add(
+        (b) => b.set(_db.collection('reminders').doc(), {
+          ...r,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }),
+      );
     }
     for (final r in resources) {
-      ops.add((b) => b.set(_db.collection('resources').doc(), {
-            ...r,
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          }));
+      ops.add(
+        (b) => b.set(_db.collection('resources').doc(), {
+          ...r,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }),
+      );
     }
 
     for (var i = 0; i < ops.length; i += 450) {
@@ -358,7 +370,7 @@ class FirestoreService {
     }
   }
 
-  Future<void> createReminder({
+  Future<DocumentReference<Map<String, dynamic>>> createReminder({
     required String userId,
     required String title,
     required String description,
@@ -366,8 +378,10 @@ class FirestoreService {
     required String reminderDate,
     required String reminderTime,
     String createdBy = 'user',
+    String recurrence = 'none',
+    int leadTimeMinutes = 0,
   }) async {
-    await _db.collection('reminders').add({
+    return _db.collection('reminders').add({
       'userId': userId,
       'title': title,
       'description': description,
@@ -375,9 +389,69 @@ class FirestoreService {
       'reminderDate': reminderDate,
       'reminderTime': reminderTime,
       'status': 'active',
+      'done': false,
+      'snoozedUntil': null,
+      'recurrence': recurrence,
+      'leadTimeMinutes': leadTimeMinutes,
       'createdBy': createdBy,
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> updateReminder({
+    required String reminderId,
+    String? title,
+    String? description,
+    String? courseCode,
+    String? reminderDate,
+    String? reminderTime,
+    String? status,
+    String? recurrence,
+    int? leadTimeMinutes,
+  }) async {
+    final updates = <String, dynamic>{};
+    if (title != null) updates['title'] = title;
+    if (description != null) updates['description'] = description;
+    if (courseCode != null) updates['courseCode'] = courseCode;
+    if (reminderDate != null) updates['reminderDate'] = reminderDate;
+    if (reminderTime != null) updates['reminderTime'] = reminderTime;
+    if (status != null) updates['status'] = status;
+    if (recurrence != null) updates['recurrence'] = recurrence;
+    if (leadTimeMinutes != null) updates['leadTimeMinutes'] = leadTimeMinutes;
+    if (updates.isEmpty) return;
+    updates['updatedAt'] = FieldValue.serverTimestamp();
+    await _db.collection('reminders').doc(reminderId).update(updates);
+  }
+
+  /// Mark a reminder done (or not). Done reminders drop off the active list but
+  /// stay in Firestore for history.
+  Future<void> setReminderDone(String reminderId, bool done) async {
+    await _db.collection('reminders').doc(reminderId).update({
+      'done': done,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Push a reminder's alert to a later moment without changing its due date.
+  Future<void> snoozeReminder(String reminderId, DateTime until) async {
+    await _db.collection('reminders').doc(reminderId).update({
+      'snoozedUntil': until.toIso8601String(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> deleteReminder(String reminderId) async {
+    await _db.collection('reminders').doc(reminderId).delete();
+  }
+
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> fetchUserReminders(
+    String userId,
+  ) async {
+    final snapshot = await _db
+        .collection('reminders')
+        .where('userId', isEqualTo: userId)
+        .get();
+    return snapshot.docs;
   }
 
   Future<void> addAnnouncement({
@@ -494,6 +568,7 @@ class FirestoreService {
     required String contactPerson,
     required String proposalPdfUrl,
     required String proposalFileName,
+    String posterUrl = '',
   }) async {
     await _db.collection('eventProposals').add({
       'submittedBy': submittedBy,
@@ -508,6 +583,7 @@ class FirestoreService {
       'contactPerson': contactPerson,
       'proposalPdfUrl': proposalPdfUrl,
       'proposalFileName': proposalFileName,
+      'posterUrl': posterUrl,
       'status': 'submitted',
       'eventAdminRemark': '',
       'mainAdminRemark': '',
@@ -530,6 +606,7 @@ class FirestoreService {
     required String contactPerson,
     required String proposalPdfUrl,
     required String proposalFileName,
+    String posterUrl = '',
   }) async {
     await _db.collection('eventProposals').doc(proposalId).set({
       'submittedBy': submittedBy,
@@ -543,6 +620,7 @@ class FirestoreService {
       'contactPerson': contactPerson,
       'proposalPdfUrl': proposalPdfUrl,
       'proposalFileName': proposalFileName,
+      'posterUrl': posterUrl,
       'status': 'submitted',
       'mainAdminRemark': '',
       'resubmittedAt': FieldValue.serverTimestamp(),
@@ -565,18 +643,86 @@ class FirestoreService {
     }, SetOptions(merge: true));
   }
 
+  Future<void> adminRequestProposalChanges({
+    required String proposalId,
+    required String remark,
+    required String reviewedBy,
+  }) async {
+    final proposalRef = _db.collection('eventProposals').doc(proposalId);
+    final notificationRef = _db.collection('notifications').doc();
+
+    await _db.runTransaction((transaction) async {
+      final latest = await transaction.get(proposalRef);
+      final data = latest.data();
+      if (!latest.exists || data == null) {
+        throw StateError('Proposal no longer exists.');
+      }
+
+      final submittedBy = (data['submittedBy'] ?? '').toString();
+      final title = (data['title'] ?? 'Event proposal').toString();
+      transaction.set(proposalRef, {
+        'status': 'needs_changes',
+        'mainAdminRemark': remark,
+        'mainAdminReviewedBy': reviewedBy,
+        'mainAdminReviewedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (submittedBy.isNotEmpty) {
+        transaction.set(notificationRef, {
+          'title': 'Proposal pending edit: $title',
+          'body': remark,
+          'type': 'event_proposal',
+          'audience': 'student',
+          'targetUserId': submittedBy,
+          'sourceProposalId': proposalId,
+          'createdAt': FieldValue.serverTimestamp(),
+          'readBy': <String>[],
+        });
+      }
+    });
+  }
+
   Future<void> adminRejectProposal({
     required String proposalId,
     required String remark,
     required String reviewedBy,
   }) async {
-    await _db.collection('eventProposals').doc(proposalId).set({
-      'status': 'admin_rejected',
-      'mainAdminRemark': remark,
-      'mainAdminReviewedBy': reviewedBy,
-      'mainAdminReviewedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final proposalRef = _db.collection('eventProposals').doc(proposalId);
+    final notificationRef = _db.collection('notifications').doc();
+
+    await _db.runTransaction((transaction) async {
+      final latest = await transaction.get(proposalRef);
+      final data = latest.data();
+      if (!latest.exists || data == null) {
+        throw StateError('Proposal no longer exists.');
+      }
+
+      final submittedBy = (data['submittedBy'] ?? '').toString();
+      final title = (data['title'] ?? 'Event proposal').toString();
+      transaction.set(proposalRef, {
+        'status': 'admin_rejected',
+        'mainAdminRemark': remark,
+        'mainAdminReviewedBy': reviewedBy,
+        'mainAdminReviewedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (submittedBy.isNotEmpty) {
+        transaction.set(notificationRef, {
+          'title': 'Proposal rejected: $title',
+          'body': remark.isEmpty
+              ? 'Please contact the event administrator.'
+              : remark,
+          'type': 'event_proposal',
+          'audience': 'student',
+          'targetUserId': submittedBy,
+          'sourceProposalId': proposalId,
+          'createdAt': FieldValue.serverTimestamp(),
+          'readBy': <String>[],
+        });
+      }
+    });
   }
 
   Future<void> publishApprovedProposal({
@@ -592,7 +738,9 @@ class FirestoreService {
     await _db.runTransaction((transaction) async {
       final latest = await transaction.get(proposalRef);
       final latestData = latest.data();
-      if (!latest.exists || latestData?['status'] != 'event_admin_checked') {
+      final status = latestData?['status'];
+      if (!latest.exists ||
+          (status != 'submitted' && status != 'event_admin_checked')) {
         throw StateError('Proposal is not ready to publish.');
       }
 
@@ -600,6 +748,7 @@ class FirestoreService {
       final title = (source['title'] ?? 'Approved Event').toString();
       final description = (source['description'] ?? '').toString();
       final eventDate = (source['eventDate'] ?? '').toString();
+      final eventEndDate = (source['eventEndDate'] ?? '').toString();
       final startTime = (source['startTime'] ?? '').toString();
       final endTime = (source['endTime'] ?? '').toString();
       final venue = (source['venue'] ?? '').toString();
@@ -608,10 +757,16 @@ class FirestoreService {
         'title': title,
         'description': description,
         'eventDate': eventDate,
+        'eventEndDate': eventEndDate,
         'startTime': startTime,
         'endTime': endTime,
         'venue': venue,
         'clubName': source['clubName'] ?? '',
+        // Carry the proposal's poster + capacity across to the published event.
+        'posterUrl': source['posterUrl'] ?? '',
+        'capacity': source['capacity'] ?? 0,
+        'hostType': source['hostType'] ?? 'club',
+        'attendees': <String>[],
         'sourceProposalId': proposalId,
         'status': 'published',
         'createdBy': approvedBy,
@@ -622,7 +777,7 @@ class FirestoreService {
       transaction.set(announcementRef, {
         'title': 'Approved Event: $title',
         'description':
-            '$description\n\nVenue: $venue\nDate: $eventDate $startTime-$endTime',
+            '$description\n\nVenue: $venue\nDate: $eventDate${eventEndDate.isEmpty ? '' : ' - $eventEndDate'} $startTime-$endTime',
         'category': 'Event',
         'priority': 'high',
         'targetProgramme': 'All',
@@ -635,7 +790,8 @@ class FirestoreService {
 
       transaction.set(notificationRef, {
         'title': 'New campus event: $title',
-        'body': '$eventDate at $venue',
+        'body':
+            '$eventDate${eventEndDate.isEmpty ? '' : ' - $eventEndDate'} at $venue',
         'type': 'event',
         'audience': 'students',
         'eventId': eventRef.id,
@@ -652,6 +808,111 @@ class FirestoreService {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
+  }
+
+  // ---- Events: detail, RSVP, admin create ----
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> streamEvent(String eventId) {
+    return _db.collection('events').doc(eventId).snapshots();
+  }
+
+  /// Admin creates a published event directly (no proposal flow).
+  Future<DocumentReference<Map<String, dynamic>>> createEvent({
+    required String title,
+    required String description,
+    required String clubName,
+    required String hostType, // 'club' | 'school'
+    required String eventDate,
+    required String startTime,
+    required String endTime,
+    required String venue,
+    required int capacity,
+    required String posterUrl,
+    required String createdBy,
+    String category = '',
+  }) async {
+    return _db.collection('events').add({
+      'title': title,
+      'description': description,
+      'clubName': clubName,
+      'hostType': hostType,
+      'category': category,
+      'eventDate': eventDate,
+      'startTime': startTime,
+      'endTime': endTime,
+      'venue': venue,
+      'capacity': capacity,
+      'posterUrl': posterUrl,
+      'attendees': <String>[],
+      'status': 'published',
+      'createdBy': createdBy,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Attach/replace an event's poster image URL.
+  Future<void> setEventPoster(String eventId, String posterUrl) async {
+    await _db.collection('events').doc(eventId).set({
+      'posterUrl': posterUrl,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Student RSVPs "going": add to attendees + mirror onto their calendar.
+  Future<void> joinEvent({
+    required String eventId,
+    required String userId,
+    required Map<String, dynamic> event,
+  }) async {
+    await _db.collection('events').doc(eventId).set({
+      'attendees': FieldValue.arrayUnion([userId]),
+    }, SetOptions(merge: true));
+
+    // Mirror onto the personal calendar (idempotent by linkedEventId).
+    final existing = await _db
+        .collection('calendarEvents')
+        .where('userId', isEqualTo: userId)
+        .where('linkedEventId', isEqualTo: eventId)
+        .limit(1)
+        .get();
+    if (existing.docs.isEmpty) {
+      await _db.collection('calendarEvents').add({
+        'userId': userId,
+        'title': (event['title'] ?? 'Campus Event').toString(),
+        'date': (event['eventDate'] ?? '').toString(),
+        'startTime': (event['startTime'] ?? '').toString(),
+        'endTime': (event['endTime'] ?? '').toString(),
+        'location': (event['venue'] ?? '').toString(),
+        'type': 'meeting',
+        'courseCode': '',
+        'notes': 'Campus event: ${event['clubName'] ?? ''}',
+        'recurrence': 'none',
+        'leadTimeMinutes': 60,
+        'linkedEventId': eventId,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
+  /// Student cancels RSVP: remove from attendees + remove the calendar mirror.
+  Future<void> leaveEvent({
+    required String eventId,
+    required String userId,
+  }) async {
+    await _db.collection('events').doc(eventId).set({
+      'attendees': FieldValue.arrayRemove([userId]),
+    }, SetOptions(merge: true));
+
+    final linked = await _db
+        .collection('calendarEvents')
+        .where('userId', isEqualTo: userId)
+        .where('linkedEventId', isEqualTo: eventId)
+        .get();
+    for (final doc in linked.docs) {
+      await doc.reference.delete();
+    }
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> streamNotifications() {
@@ -678,6 +939,7 @@ class FirestoreService {
     required String category,
     required String directionText,
     required String keywords,
+    required String nearestTrainedPlace,
     double? latitude,
     double? longitude,
   }) async {
@@ -693,6 +955,7 @@ class FirestoreService {
           .map((item) => item.trim())
           .where((item) => item.isNotEmpty)
           .toList(),
+      'nearestTrainedPlace': nearestTrainedPlace,
       'latitude': ?latitude,
       'longitude': ?longitude,
       'createdAt': FieldValue.serverTimestamp(),
@@ -709,6 +972,7 @@ class FirestoreService {
     required String category,
     required String directionText,
     required String keywords,
+    required String nearestTrainedPlace,
     double? latitude,
     double? longitude,
   }) async {
@@ -724,6 +988,7 @@ class FirestoreService {
           .map((item) => item.trim())
           .where((item) => item.isNotEmpty)
           .toList(),
+      'nearestTrainedPlace': nearestTrainedPlace,
       'latitude': latitude,
       'longitude': longitude,
       'updatedAt': FieldValue.serverTimestamp(),

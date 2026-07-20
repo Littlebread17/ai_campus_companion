@@ -1,10 +1,17 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/indoor_step.dart';
 import '../services/firestore_service.dart';
+import '../services/live_positioning_service.dart';
+import '../services/wifi_fingerprint_service.dart';
+import '../utils/campus_coords.dart';
+import '../utils/location_search.dart';
 import 'arrow_navigation_screen.dart';
 
 class LocationsScreen extends StatefulWidget {
@@ -26,6 +33,12 @@ class _CampusLocation {
   final List<String> keywords;
   final double? latitude;
   final double? longitude;
+  final bool isTrained;
+  final int sampleCount;
+  final String nearestTrainedPlace;
+  final String guidanceBlock;
+  final String guidanceLevel;
+  final String guidancePlace;
 
   const _CampusLocation({
     required this.name,
@@ -37,32 +50,32 @@ class _CampusLocation {
     this.keywords = const [],
     this.latitude,
     this.longitude,
+    this.isTrained = false,
+    this.sampleCount = 0,
+    this.nearestTrainedPlace = '',
+    this.guidanceBlock = '',
+    this.guidanceLevel = '',
+    this.guidancePlace = '',
   });
 }
 
 class _LocationsScreenState extends State<LocationsScreen> {
   final service = FirestoreService();
+  final wifiService = WifiFingerprintService();
   late final TextEditingController search;
 
   String currentBlock = 'Academic Block A';
   String currentLevel = 'Ground floor';
   String selectedCategory = 'All';
   bool useLiftRoute = false;
+  bool _handledInitialQuery = false;
 
-  /// Coordinate for each campus block (used only to give the arrow guide a
-  /// target bearing — there is no map view).
-  static const Map<String, LatLng> buildingCoords = {
-    'Academic Block A': LatLng(2.814000, 101.758273),
-    'Academic Block B': LatLng(2.814300, 101.758500),
-    'Academic Block C': LatLng(2.813700, 101.758600),
-    'Academic Block D': LatLng(2.813600, 101.758000),
-    'Academic Block E': LatLng(2.813400, 101.758400),
-    'Learning Resource Centre': LatLng(2.814400, 101.758100),
-    'Student Centre': LatLng(2.813300, 101.758800),
-    'Sports Complex': LatLng(2.814600, 101.758700),
-    'Hall of Residence': LatLng(2.813100, 101.759000),
-    'Service Building': LatLng(2.813800, 101.757800),
-  };
+  // WiFi auto-detection of the starting point.
+  bool _detecting = false;
+  String? _detectedPlace;
+  double? _detectedConfidence;
+
+  static const double _detectThreshold = 0.6;
 
   static const blocks = [
     'Academic Block A',
@@ -323,23 +336,76 @@ class _LocationsScreenState extends State<LocationsScreen> {
     ),
   ];
 
+  StreamSubscription<LocationPrediction?>? _posSub;
+
   @override
   void initState() {
     super.initState();
     search = TextEditingController(text: widget.initialQuery);
+    _startLivePositioning();
   }
 
   @override
   void dispose() {
+    _posSub?.cancel();
+    LivePositioningService.instance.stop();
     search.dispose();
     super.dispose();
   }
 
+  /// Subscribe to the shared positioning stream so the "You are here" chip and
+  /// the starting-point dropdowns keep updating as the student moves.
+  Future<void> _startLivePositioning() async {
+    setState(() => _detecting = true);
+    _posSub = LivePositioningService.instance.stream.listen((p) {
+      if (!mounted) return;
+      setState(() {
+        _detecting = false;
+        if (p != null && p.confidence >= _detectThreshold) {
+          _detectedPlace = p.display;
+          _detectedConfidence = p.confidence;
+          if (_blockList.contains(p.block)) currentBlock = p.block;
+          if (_levelList.contains(p.level)) currentLevel = p.level;
+        }
+      });
+    });
+    await LivePositioningService.instance.start();
+  }
+
+  static const _blockList = [
+    'Academic Block A',
+    'Academic Block B',
+    'Academic Block C',
+    'Academic Block D',
+    'Academic Block E',
+    'Learning Resource Centre',
+    'Student Centre',
+    'Sports Complex',
+    'Hall of Residence',
+    'Service Building',
+  ];
+  static const _levelList = [
+    'Ground floor',
+    'Level 1',
+    'Level 2',
+    'Level 3',
+    'Level 4',
+    'Level 5',
+    'Rooftop',
+  ];
+
   LatLng? _coordFor(_CampusLocation location) {
+    if (!location.isTrained && location.guidanceBlock.isNotEmpty) {
+      return CampusCoords.forBlock(location.guidanceBlock);
+    }
     if (location.latitude != null && location.longitude != null) {
       return LatLng(location.latitude!, location.longitude!);
     }
-    return buildingCoords[location.building];
+    return CampusCoords.forBlock(
+      location.guidanceBlock.isEmpty
+          ? location.building
+          : location.guidanceBlock,
+    );
   }
 
   IconData _categoryIcon(String category) {
@@ -368,6 +434,15 @@ class _LocationsScreenState extends State<LocationsScreen> {
   void _openArrowGuide(_CampusLocation location) {
     final coord = _coordFor(location);
     if (coord == null) return;
+    final targetBlock = location.guidanceBlock.isEmpty
+        ? location.building
+        : location.guidanceBlock;
+    final targetLevel = location.guidanceLevel.isEmpty
+        ? location.level
+        : location.guidanceLevel;
+    final targetPlace = location.guidancePlace.isNotEmpty
+        ? location.guidancePlace
+        : (location.isTrained ? location.name : '');
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ArrowNavigationScreen(
@@ -375,6 +450,12 @@ class _LocationsScreenState extends State<LocationsScreen> {
           destinationLatitude: coord.latitude,
           destinationLongitude: coord.longitude,
           indoorSteps: _directionSteps(location),
+          destinationBlock: targetBlock,
+          destinationLevel: _levelList.contains(targetLevel) ? targetLevel : '',
+          destinationPlace: targetPlace,
+          guidanceVia: location.isTrained
+              ? ''
+              : (targetPlace.isEmpty ? location.building : targetPlace),
         ),
       ),
     );
@@ -396,56 +477,282 @@ class _LocationsScreenState extends State<LocationsScreen> {
       keywords: keywords,
       latitude: (data['latitude'] as num?)?.toDouble(),
       longitude: (data['longitude'] as num?)?.toDouble(),
+      nearestTrainedPlace: (data['nearestTrainedPlace'] ?? '').toString(),
     );
   }
 
   List<_CampusLocation> _mergeLocations(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    List<TrainedPlace> trainedPlaces,
   ) {
-    final locations = docs.map(_fromDoc).toList();
+    final directory = docs.map(_fromDoc).toList();
     for (final fallback in starterLocations) {
-      final exists = locations.any(
+      final exists = directory.any(
         (item) =>
             item.name.toLowerCase() == fallback.name.toLowerCase() &&
             item.room.toLowerCase() == fallback.room.toLowerCase(),
       );
-      if (!exists) locations.add(fallback);
+      if (!exists) directory.add(fallback);
     }
-    locations.sort(
-      (a, b) => '${a.category} ${a.name}'.compareTo('${b.category} ${b.name}'),
-    );
+
+    final locations = <_CampusLocation>[];
+    for (final trained in trainedPlaces) {
+      final matchIndex = directory.indexWhere(
+        (location) => _sameDestination(location, trained),
+      );
+      final match = matchIndex < 0 ? null : directory.removeAt(matchIndex);
+      locations.add(
+        _CampusLocation(
+          name: match?.name ?? trained.placeName,
+          building: trained.block,
+          level: trained.level,
+          room: match?.room ?? trained.placeName,
+          category: match?.category ?? _categoryForTrained(trained.placeName),
+          directionText: match?.directionText ?? '',
+          keywords: match?.keywords ?? const [],
+          latitude: match?.latitude,
+          longitude: match?.longitude,
+          isTrained: true,
+          sampleCount: trained.samples,
+          guidanceBlock: trained.block,
+          guidanceLevel: trained.level,
+          guidancePlace: trained.placeName,
+        ),
+      );
+    }
+
+    for (final location in directory) {
+      final anchor = _nearestAnchor(location, locations);
+      locations.add(
+        _CampusLocation(
+          name: location.name,
+          building: location.building,
+          level: location.level,
+          room: location.room,
+          category: location.category,
+          directionText: location.directionText,
+          keywords: location.keywords,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          nearestTrainedPlace: location.nearestTrainedPlace,
+          guidanceBlock: anchor?.building ?? '',
+          guidanceLevel: anchor?.level ?? '',
+          guidancePlace: anchor?.guidancePlace ?? '',
+        ),
+      );
+    }
+
+    _sortLocations(locations);
     return locations;
   }
 
+  bool _sameDestination(_CampusLocation location, TrainedPlace trained) {
+    if (normalizeLocationText(location.building) !=
+        normalizeLocationText(trained.block)) {
+      return false;
+    }
+    final trainedName = normalizeLocationText(trained.placeName);
+    final name = normalizeLocationText(location.name);
+    final room = normalizeLocationText(location.room);
+    return name == trainedName ||
+        room == trainedName ||
+        (room.length >= 3 && trainedName.endsWith(room));
+  }
+
+  String _categoryForTrained(String placeName) {
+    final name = normalizeLocationText(placeName);
+    if (RegExp(r'^(a|b|c|d|e|rc)\d+').hasMatch(name)) return 'Classroom';
+    if (name.contains('library')) return 'Study';
+    if (name.contains('office') ||
+        name.contains('finance') ||
+        name.contains('hop')) {
+      return 'Office';
+    }
+    return 'Facility';
+  }
+
+  _CampusLocation? _nearestAnchor(
+    _CampusLocation location,
+    List<_CampusLocation> trained,
+  ) {
+    if (trained.isEmpty) return null;
+    final manual = normalizeLocationText(location.nearestTrainedPlace);
+    if (manual.isNotEmpty) {
+      for (final candidate in trained) {
+        if (normalizeLocationText(candidate.guidancePlace) == manual ||
+            normalizeLocationText(candidate.name) == manual ||
+            normalizeLocationText(
+                  '${candidate.building} ${candidate.level} ${candidate.guidancePlace}',
+                ) ==
+                manual) {
+          return candidate;
+        }
+      }
+    }
+
+    final sameBlock = trained
+        .where(
+          (candidate) =>
+              normalizeLocationText(candidate.building) ==
+              normalizeLocationText(location.building),
+        )
+        .toList();
+    final sameLevel = sameBlock
+        .where(
+          (candidate) =>
+              normalizeLocationText(candidate.level) ==
+              normalizeLocationText(location.level),
+        )
+        .toList();
+    final candidates = sameLevel.isNotEmpty
+        ? sameLevel
+        : (sameBlock.isNotEmpty ? sameBlock : trained);
+    final targetRoom = roomNumber('${location.room} ${location.name}');
+    final targetLevel = roomNumber(location.level);
+    final targetCoord = CampusCoords.forBlock(location.building);
+
+    candidates.sort((a, b) {
+      double score(_CampusLocation candidate) {
+        final candidateLevel = roomNumber(candidate.level);
+        final candidateRoom = roomNumber(candidate.guidancePlace);
+        final levelGap = targetLevel == null || candidateLevel == null
+            ? 0
+            : (targetLevel - candidateLevel).abs() * 1000;
+        final roomGap = targetRoom == null || candidateRoom == null
+            ? 500
+            : (targetRoom - candidateRoom).abs();
+        final candidateCoord = CampusCoords.forBlock(candidate.building);
+        final buildingGap =
+            sameBlock.isEmpty && targetCoord != null && candidateCoord != null
+            ? const Distance().as(
+                    LengthUnit.Meter,
+                    targetCoord,
+                    candidateCoord,
+                  ) *
+                  10000
+            : 0;
+        return (buildingGap + levelGap + roomGap).toDouble();
+      }
+
+      final byScore = score(a).compareTo(score(b));
+      if (byScore != 0) return byScore;
+      return a.name.compareTo(b.name);
+    });
+    return candidates.first;
+  }
+
+  Iterable<String> _searchFields(_CampusLocation location) => [
+    location.name,
+    location.building,
+    location.level,
+    location.room,
+    location.category,
+    location.guidancePlace,
+    ...location.keywords,
+  ];
+
+  void _sortLocations(List<_CampusLocation> locations) {
+    final query = search.text.trim();
+    locations.sort((a, b) {
+      if (a.isTrained != b.isTrained) return a.isTrained ? -1 : 1;
+      if (query.isNotEmpty) {
+        final rank = locationMatchRank(
+          query,
+          _searchFields(a),
+        ).compareTo(locationMatchRank(query, _searchFields(b)));
+        if (rank != 0) return rank;
+      }
+      return '${a.building} ${a.level} ${a.name}'.compareTo(
+        '${b.building} ${b.level} ${b.name}',
+      );
+    });
+  }
+
   bool _matches(_CampusLocation location) {
-    final query = search.text.trim().toLowerCase();
+    final query = search.text.trim();
     final categoryMatches =
         selectedCategory == 'All' || location.category == selectedCategory;
     if (!categoryMatches) return false;
     if (query.isEmpty) return true;
-    final haystack = [
-      location.name,
-      location.building,
-      location.level,
-      location.room,
-      location.category,
-      ...location.keywords,
-    ].join(' ').toLowerCase();
-    return haystack.contains(query);
+    return locationMatchRank(query, _searchFields(location)) < 3;
   }
 
-  List<String> _directionSteps(_CampusLocation location) {
+  void _openUniqueInitialMatch(List<_CampusLocation> locations) {
+    if (_handledInitialQuery || widget.initialQuery.trim().isEmpty) return;
+    _handledInitialQuery = true;
+    if (locations.isEmpty) return;
+
+    final bestRank = locations.fold<int>(3, (best, location) {
+      final rank = locationMatchRank(
+        widget.initialQuery,
+        _searchFields(location),
+      );
+      return rank < best ? rank : best;
+    });
+    final best = locations
+        .where(
+          (location) =>
+              locationMatchRank(widget.initialQuery, _searchFields(location)) ==
+              bestRank,
+        )
+        .toList();
+    if (best.length != 1) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _openLocationSheet(best.first);
+    });
+  }
+
+  List<IndoorStep> _directionSteps(_CampusLocation location) {
     final detailSteps = location.directionText
         .split(';')
         .map((item) => item.trim())
         .where((item) => item.isNotEmpty)
         .toList();
+    // Clean, single-level string for the destination (blank if it's a range).
+    final targetBlock = location.guidanceBlock.isEmpty
+        ? location.building
+        : location.guidanceBlock;
+    final targetLevel = location.guidanceLevel.isEmpty
+        ? location.level
+        : location.guidanceLevel;
+    final targetPlace = location.guidancePlace.isEmpty
+        ? location.name
+        : location.guidancePlace;
+    final destLevel = _levelList.contains(targetLevel) ? targetLevel : '';
     return [
-      'Start from $currentBlock, $currentLevel.',
+      // Tagged with the student's current position so it ticks immediately.
+      IndoorStep(
+        'Start from $currentBlock, $currentLevel.',
+        expectedBlock: currentBlock,
+        expectedLevel: currentLevel,
+      ),
       if (useLiftRoute)
-        'Use lift-accessible paths where available and avoid stairs.',
-      ...detailSteps,
-      'Confirm the room label: ${location.room.isEmpty ? location.name : location.room}.',
+        const IndoorStep(
+          'Use lift-accessible paths where available and avoid stairs.',
+        ),
+      if (!location.isTrained && location.guidancePlace.isNotEmpty)
+        IndoorStep(
+          'Navigate first to the nearby trained point $targetPlace.',
+          expectedBlock: targetBlock,
+          expectedLevel: destLevel,
+          expectedPlace: targetPlace,
+        ),
+      // Middle steps are prose; the last one is tagged with the destination
+      // block so it ticks when the student reaches that building.
+      for (var i = 0; i < detailSteps.length; i++)
+        IndoorStep(
+          detailSteps[i],
+          expectedBlock: location.isTrained && i == detailSteps.length - 1
+              ? targetBlock
+              : null,
+        ),
+      IndoorStep(
+        'Confirm the room label: ${location.room.isEmpty ? location.name : location.room}.',
+        expectedBlock: location.isTrained ? targetBlock : null,
+        expectedLevel: location.isTrained ? destLevel : null,
+        expectedPlace: location.isTrained ? targetPlace : null,
+      ),
     ];
   }
 
@@ -513,6 +820,66 @@ class _LocationsScreenState extends State<LocationsScreen> {
     );
   }
 
+  Widget _detectionChip() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: _detectedPlace != null
+                    ? const Color(0xffe0f2fe)
+                    : const Color(0xfff1f5f9),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _detecting
+                        ? Icons.wifi_find
+                        : (_detectedPlace != null
+                              ? Icons.wifi
+                              : Icons.wifi_off),
+                    size: 18,
+                    color: _detectedPlace != null
+                        ? const Color(0xff0284c7)
+                        : const Color(0xff94a3b8),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _detecting
+                          ? 'Scanning WiFi…'
+                          : _detectedPlace != null
+                          ? 'Detected: $_detectedPlace '
+                                '(${((_detectedConfidence ?? 0) * 100).round()}%)'
+                          : 'WiFi location not detected — set it manually.',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Re-scan WiFi',
+            onPressed: _detecting
+                ? null
+                : () async {
+                    setState(() => _detecting = true);
+                    await LivePositioningService.instance.refreshTraining();
+                    await LivePositioningService.instance.start();
+                    if (mounted) setState(() => _detecting = false);
+                  },
+            icon: const Icon(Icons.refresh, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _startingPointPanel() {
     return Container(
       decoration: BoxDecoration(
@@ -529,13 +896,16 @@ class _LocationsScreenState extends State<LocationsScreen> {
             style: TextStyle(fontWeight: FontWeight.w700),
           ),
           subtitle: Text(
-            '$currentBlock · $currentLevel',
+            _detecting
+                ? 'Detecting your location via WiFi…'
+                : '$currentBlock · $currentLevel',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 12),
           ),
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           children: [
+            _detectionChip(),
             const Align(
               alignment: Alignment.centerLeft,
               child: Text(
@@ -559,10 +929,7 @@ class _LocationsScreenState extends State<LocationsScreen> {
                         .map(
                           (block) => DropdownMenuItem(
                             value: block,
-                            child: Text(
-                              block,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                            child: Text(block, overflow: TextOverflow.ellipsis),
                           ),
                         )
                         .toList(),
@@ -585,10 +952,7 @@ class _LocationsScreenState extends State<LocationsScreen> {
                         .map(
                           (level) => DropdownMenuItem(
                             value: level,
-                            child: Text(
-                              level,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                            child: Text(level, overflow: TextOverflow.ellipsis),
                           ),
                         )
                         .toList(),
@@ -628,7 +992,11 @@ class _LocationsScreenState extends State<LocationsScreen> {
                 color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(_categoryIcon(location.category), color: color, size: 20),
+              child: Icon(
+                _categoryIcon(location.category),
+                color: color,
+                size: 20,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -656,6 +1024,36 @@ class _LocationsScreenState extends State<LocationsScreen> {
                       fontSize: 12,
                       color: Color(0xff94a3b8),
                     ),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Icon(
+                        location.isTrained ? Icons.wifi : Icons.alt_route,
+                        size: 13,
+                        color: location.isTrained
+                            ? const Color(0xff059669)
+                            : const Color(0xff7c3aed),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          location.isTrained
+                              ? 'Indoor guidance available'
+                              : location.guidancePlace.isEmpty
+                              ? 'Guidance to the destination building'
+                              : 'Guidance via ${location.guidancePlace}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: location.isTrained
+                                ? const Color(0xff059669)
+                                : const Color(0xff7c3aed),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -741,6 +1139,37 @@ class _LocationsScreenState extends State<LocationsScreen> {
               ],
             ),
             const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: location.isTrained
+                    ? const Color(0xffecfdf5)
+                    : const Color(0xfff5f3ff),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    location.isTrained ? Icons.wifi : Icons.alt_route,
+                    color: location.isTrained
+                        ? const Color(0xff059669)
+                        : const Color(0xff7c3aed),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      location.isTrained
+                          ? 'This destination has indoor WiFi training.'
+                          : location.guidancePlace.isEmpty
+                          ? 'Guidance uses the destination building and then continues with written directions.'
+                          : 'Guidance first uses the nearby trained point ${location.guidancePlace}, then continues with written directions.',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -787,7 +1216,7 @@ class _LocationsScreenState extends State<LocationsScreen> {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Expanded(child: Text(entry.value)),
+                    Expanded(child: Text(entry.value.text)),
                   ],
                 ),
               ),
@@ -804,98 +1233,116 @@ class _LocationsScreenState extends State<LocationsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xfff6f8ff),
       appBar: AppBar(title: const Text('Campus Navigation')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: service.streamCollection('locations'),
-        builder: (context, snapshot) {
-          final loading = !snapshot.hasData && !snapshot.hasError;
-          final docs = snapshot.data?.docs ?? [];
-          final allLocations = _mergeLocations(docs);
-          final locations = allLocations.where(_matches).toList();
+      body: StreamBuilder<List<TrainedPlace>>(
+        stream: wifiService.streamTrainedPlaces(),
+        builder: (context, trainedSnapshot) {
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: service.streamCollection('locations'),
+            builder: (context, snapshot) {
+              final loading =
+                  (!snapshot.hasData && !snapshot.hasError) ||
+                  (!trainedSnapshot.hasData && !trainedSnapshot.hasError);
+              final docs = snapshot.data?.docs ?? [];
+              final trained = trainedSnapshot.data ?? const <TrainedPlace>[];
+              final allLocations = _mergeLocations(docs, trained);
+              final locations = allLocations.where(_matches).toList();
+              _sortLocations(locations);
+              if (!loading) _openUniqueInitialMatch(locations);
 
-          // Group filtered locations by category for section headers.
-          final grouped = <String, List<_CampusLocation>>{};
-          for (final loc in locations) {
-            grouped.putIfAbsent(loc.category, () => []).add(loc);
-          }
-          final groupKeys = grouped.keys.toList()..sort();
+              final grouped = <String, List<_CampusLocation>>{};
+              for (final loc in locations) {
+                final group = loc.isTrained
+                    ? 'Indoor guidance'
+                    : 'Guidance via nearby point';
+                grouped.putIfAbsent(group, () => []).add(loc);
+              }
+              final groupKeys = [
+                if (grouped.containsKey('Indoor guidance')) 'Indoor guidance',
+                if (grouped.containsKey('Guidance via nearby point'))
+                  'Guidance via nearby point',
+              ];
 
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _searchBox(),
-              const SizedBox(height: 12),
-              _NextClassShortcut(
-                service: service,
-                userId: userId,
-                allLocations: allLocations,
-                onNavigate: _openArrowGuide,
-              ),
-              const SizedBox(height: 12),
-              _categoryChips(),
-              const SizedBox(height: 12),
-              _startingPointPanel(),
-              const SizedBox(height: 8),
-              if (loading)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              else if (locations.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(
-                    child: Column(
-                      children: [
-                        Icon(Icons.search_off, color: Color(0xff94a3b8)),
-                        SizedBox(height: 8),
-                        Text('No matching location found'),
-                      ],
-                    ),
+              return ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _searchBox(),
+                  const SizedBox(height: 12),
+                  _NextClassShortcut(
+                    service: service,
+                    userId: userId,
+                    allLocations: allLocations,
+                    onNavigate: _openArrowGuide,
                   ),
-                )
-              else
-                ...groupKeys.map((category) {
-                  final items = grouped[category]!;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(4, 14, 4, 4),
-                        child: Text(
-                          category.toUpperCase(),
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                            color: Color(0xff94a3b8),
-                          ),
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: const Color(0xffe2e8f0)),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 2,
-                        ),
+                  const SizedBox(height: 12),
+                  _categoryChips(),
+                  const SizedBox(height: 12),
+                  _startingPointPanel(),
+                  const SizedBox(height: 8),
+                  if (loading)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (locations.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(
                         child: Column(
                           children: [
-                            for (var i = 0; i < items.length; i++) ...[
-                              _locationRow(items[i]),
-                              if (i != items.length - 1)
-                                const Divider(height: 1),
-                            ],
+                            Icon(Icons.search_off, color: Color(0xff94a3b8)),
+                            SizedBox(height: 8),
+                            Text('No matching location found'),
                           ],
                         ),
                       ),
-                    ],
-                  );
-                }),
-              const SizedBox(height: 24),
-            ],
+                    )
+                  else
+                    ...groupKeys.map((category) {
+                      final items = grouped[category]!;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 14, 4, 4),
+                            child: Text(
+                              category.toUpperCase(),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5,
+                                color: Color(0xff94a3b8),
+                              ),
+                            ),
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: const Color(0xffe2e8f0),
+                              ),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 2,
+                            ),
+                            child: Column(
+                              children: [
+                                for (var i = 0; i < items.length; i++) ...[
+                                  _locationRow(items[i]),
+                                  if (i != items.length - 1)
+                                    const Divider(height: 1),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
+                  const SizedBox(height: 24),
+                ],
+              );
+            },
           );
         },
       ),
@@ -966,7 +1413,10 @@ class _NextClassShortcut extends StatelessWidget {
                       '${nextClass.startLabel} · ${nextClass.room.isEmpty ? nextClass.courseName : nextClass.room}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),

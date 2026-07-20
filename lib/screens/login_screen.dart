@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_theme.dart';
+import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -46,7 +49,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xfff6f8ff),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -61,12 +64,14 @@ class _LoginScreenState extends State<LoginScreen> {
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
                         colors: [
-                          Color(0xff2563eb),
-                          Color(0xff7c3aed),
-                          Color(0xff06b6d4),
+                          AppColors.primary,
+                          AppColors.secondary,
+                          AppColors.tertiary,
                         ],
                       ),
-                      borderRadius: BorderRadius.circular(28),
+                      borderRadius: BorderRadius.circular(
+                        AppTheme.prominentRadius,
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -76,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           backgroundColor: Colors.white,
                           child: Icon(
                             Icons.auto_awesome,
-                            color: Color(0xff2563eb),
+                            color: AppColors.primary,
                             size: 34,
                           ),
                         ),
@@ -104,9 +109,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 18),
                   Material(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
-                    elevation: 2,
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(
+                      AppTheme.prominentRadius,
+                    ),
+                    elevation: 1,
                     child: Padding(
                       padding: const EdgeInsets.all(22),
                       child: Column(
@@ -121,8 +128,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           const SizedBox(height: 6),
                           const Text(
-                            'Login with your school-created account.',
-                            style: TextStyle(color: Color(0xff64748b)),
+                            'Login with your verified INTI student email.',
+                            style: TextStyle(color: AppColors.muted),
                           ),
                           const SizedBox(height: 22),
                           TextField(
@@ -160,12 +167,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             width: double.infinity,
                             child: FilledButton(
                               style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xff2563eb),
+                                backgroundColor: AppColors.primary,
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 15,
                                 ),
                                 shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
+                                  borderRadius: BorderRadius.circular(
+                                    AppTheme.controlRadius,
+                                  ),
                                 ),
                               ),
                               onPressed: isLoading ? null : login,
@@ -181,13 +190,50 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                           const SizedBox(height: 14),
+                          Center(
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                const Text(
+                                  "Don't have an account? ",
+                                  style: TextStyle(
+                                    color: AppColors.muted,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const RegisterScreen(),
+                                    ),
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    padding: EdgeInsets.zero,
+                                    minimumSize: const Size(0, 0),
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  child: const Text(
+                                    'Sign up',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
                           const Center(
                             child: Text(
-                              'Student accounts are managed by the school/admin.',
+                              'Students can sign up with their INTI student email.',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                color: Color(0xff64748b),
-                                fontSize: 12,
+                                color: AppColors.faint,
+                                fontSize: 11,
                               ),
                             ),
                           ),
@@ -214,14 +260,18 @@ class _LoginScreenState extends State<LoginScreen> {
       prefixIcon: Icon(icon),
       suffixIcon: suffixIcon,
       filled: true,
-      fillColor: const Color(0xfff8fbff),
+      fillColor: AppColors.surfaceSoft,
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(color: Color(0xffdbe5f2)),
+        borderRadius: BorderRadius.circular(AppTheme.controlRadius),
+        borderSide: const BorderSide(color: AppColors.border),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(color: Color(0xffdbe5f2)),
+        borderRadius: BorderRadius.circular(AppTheme.controlRadius),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(AppTheme.controlRadius),
+        borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
       ),
     );
   }

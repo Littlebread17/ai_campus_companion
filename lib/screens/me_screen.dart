@@ -9,6 +9,7 @@ import 'event_admin_panel_screen.dart';
 import 'event_proposal_screen.dart';
 import 'feedback_admin_screen.dart';
 import 'feedback_screen.dart';
+import 'indoor_training_screen.dart';
 import 'my_results_screen.dart';
 import 'notifications_screen.dart';
 import 'timetable_upload_screen.dart';
@@ -36,7 +37,7 @@ class MeScreen extends StatelessWidget {
           final role = (profile['role'] ?? 'student').toString();
           final name = (profile['name'] ?? email).toString();
           final isAdmin = role == 'admin';
-          final isEventAdmin = role == 'event_admin' || isAdmin;
+          final isEventAdmin = role == 'event_admin';
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -75,6 +76,15 @@ class MeScreen extends StatelessWidget {
                 const Color(0xff9333ea),
                 () => _open(context, const EventProposalScreen()),
               ),
+              if (isAdmin)
+                _tile(
+                  context,
+                  Icons.wifi_find,
+                  'Indoor training',
+                  'Maintain shared campus WiFi locations',
+                  const Color(0xff0891b2),
+                  () => _open(context, const IndoorTrainingScreen()),
+                ),
               _tile(
                 context,
                 Icons.feedback_outlined,

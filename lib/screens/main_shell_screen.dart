@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'calendar_screen.dart';
 import 'campus_tab.dart';
+import 'chats_tab.dart';
 import 'courses_screen.dart';
 import 'dashboard_screen.dart';
 import 'me_screen.dart';
@@ -22,6 +23,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
     DashboardScreen(),
     CoursesScreen(),
     CalendarScreen(),
+    ChatsTab(),
     CampusTab(),
     MeScreen(),
   ];
@@ -48,6 +50,11 @@ class _MainShellScreenState extends State<MainShellScreen> {
             icon: Icon(Icons.calendar_month_outlined),
             selectedIcon: Icon(Icons.calendar_month),
             label: 'Calendar',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.forum_outlined),
+            selectedIcon: Icon(Icons.forum),
+            label: 'Chats',
           ),
           NavigationDestination(
             icon: Icon(Icons.map_outlined),

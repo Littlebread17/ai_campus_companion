@@ -6,6 +6,11 @@ import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/indoor_step.dart';
+import '../services/live_positioning_service.dart';
+import '../utils/campus_coords.dart';
+import '../utils/location_search.dart';
+
 /// Full-screen "follow the arrow" walking guide.
 ///
 /// A large arrow rotates to point at the destination using the phone compass
@@ -17,7 +22,14 @@ class ArrowNavigationScreen extends StatefulWidget {
   final String destinationName;
   final double destinationLatitude;
   final double destinationLongitude;
-  final List<String> indoorSteps;
+  final List<IndoorStep> indoorSteps;
+
+  /// Block/level of the destination, used to auto-detect indoor arrival from the
+  /// WiFi fingerprint when GPS is unreliable indoors.
+  final String destinationBlock;
+  final String destinationLevel;
+  final String destinationPlace;
+  final String guidanceVia;
 
   const ArrowNavigationScreen({
     super.key,
@@ -25,6 +37,10 @@ class ArrowNavigationScreen extends StatefulWidget {
     required this.destinationLatitude,
     required this.destinationLongitude,
     this.indoorSteps = const [],
+    this.destinationBlock = '',
+    this.destinationLevel = '',
+    this.destinationPlace = '',
+    this.guidanceVia = '',
   });
 
   @override
@@ -37,29 +53,95 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
 
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<CompassEvent>? _compassSub;
+  StreamSubscription<LocationPrediction?>? _posSub;
 
-  LatLng? _userLatLng;
+  LatLng? _gpsLatLng;
   double? _headingDegrees; // device facing direction, 0 = north
   double? _gpsCourse; // fallback heading from GPS movement
   double _gpsAccuracy = 0;
   String _status = 'Getting your location...';
   bool _arrived = false;
 
+  // Live indoor position from the WiFi fingerprint service.
+  LocationPrediction? _livePos;
+  int _reachedStep = -1; // highest indoor step index reached so far
+
   LatLng get _destination =>
       LatLng(widget.destinationLatitude, widget.destinationLongitude);
+
+  bool get _usingWifiEstimate {
+    final p = _livePos;
+    return p != null &&
+        p.confidence >= 0.7 &&
+        CampusCoords.forBlock(p.block) != null &&
+        (_gpsLatLng == null || _gpsAccuracy > 25);
+  }
+
+  LatLng? get _effectiveUserLatLng =>
+      _usingWifiEstimate ? CampusCoords.forBlock(_livePos!.block) : _gpsLatLng;
 
   @override
   void initState() {
     super.initState();
     _startLocation();
     _startCompass();
+    _startPositioning();
   }
 
   @override
   void dispose() {
     _positionSub?.cancel();
     _compassSub?.cancel();
+    _posSub?.cancel();
+    LivePositioningService.instance.stop();
     super.dispose();
+  }
+
+  Future<void> _startPositioning() async {
+    _posSub = LivePositioningService.instance.stream.listen(_onLivePosition);
+    await LivePositioningService.instance.start();
+  }
+
+  void _onLivePosition(LocationPrediction? p) {
+    if (!mounted || p == null) return;
+    setState(() {
+      _livePos = p;
+      // Auto-arrival: predicted room matches the destination building/level.
+      if (!_arrived && p.confidence >= 0.55 && _matchesDestination(p)) {
+        _arrived = true;
+      }
+      // Auto-progress indoor steps.
+      for (var i = 0; i < widget.indoorSteps.length; i++) {
+        final step = widget.indoorSteps[i];
+        if (step.hasTag &&
+            step.matchedBy(
+              block: p.block,
+              level: p.level,
+              place: p.placeName,
+            ) &&
+            i > _reachedStep) {
+          _reachedStep = i;
+        }
+      }
+    });
+  }
+
+  bool _matchesDestination(LocationPrediction p) {
+    if (widget.destinationBlock.isEmpty) return false;
+    if (p.block.toLowerCase() != widget.destinationBlock.toLowerCase()) {
+      return false;
+    }
+    if (widget.destinationLevel.isNotEmpty) {
+      if (normalizeLocationText(p.level) !=
+          normalizeLocationText(widget.destinationLevel)) {
+        return false;
+      }
+    }
+    if (widget.destinationPlace.isNotEmpty) {
+      return normalizeLocationText(p.placeName) ==
+          normalizeLocationText(widget.destinationPlace);
+    }
+    return true;
   }
 
   Future<void> _startLocation() async {
@@ -75,7 +157,9 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
       }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        setState(() => _status = 'Location permission is required to guide you.');
+        setState(
+          () => _status = 'Location permission is required to guide you.',
+        );
         return;
       }
 
@@ -88,7 +172,7 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
           ).listen((position) {
             if (!mounted) return;
             setState(() {
-              _userLatLng = LatLng(position.latitude, position.longitude);
+              _gpsLatLng = LatLng(position.latitude, position.longitude);
               _gpsAccuracy = position.accuracy;
               if (position.speed > 0.6) {
                 // Only trust GPS course when actually moving.
@@ -119,7 +203,8 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
     final lat2 = to.latitude * math.pi / 180;
     final dLon = (to.longitude - from.longitude) * math.pi / 180;
     final y = math.sin(dLon) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
     final bearing = math.atan2(y, x) * 180 / math.pi;
     return (bearing + 360) % 360;
@@ -162,7 +247,8 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
   }
 
   Widget _body() {
-    if (_userLatLng == null) {
+    final userLocation = _effectiveUserLatLng;
+    if (userLocation == null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -180,7 +266,7 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
 
     final meters = const Distance().as(
       LengthUnit.Meter,
-      _userLatLng!,
+      userLocation,
       _destination,
     );
 
@@ -189,7 +275,7 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
     }
     if (_arrived) return _arrivedView(meters);
 
-    final bearing = _bearingToDestination(_userLatLng!, _destination);
+    final bearing = _bearingToDestination(userLocation, _destination);
     final heading = _headingDegrees ?? _gpsCourse;
     final hasHeading = heading != null;
     final relative = hasHeading ? _relativeAngle(bearing, heading) : 0.0;
@@ -215,18 +301,10 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
           _arrowDial(bearing, heading, relative),
           const SizedBox(height: 32),
           _metricsRow(meters),
-          const SizedBox(height: 24),
-          if (_gpsAccuracy > 25)
-            const Card(
-              color: Color(0xfffff4e5),
-              child: ListTile(
-                leading: Icon(Icons.warning_amber, color: Colors.orange),
-                title: Text('Weak GPS signal'),
-                subtitle: Text(
-                  'Move to an open area for a more accurate arrow.',
-                ),
-              ),
-            ),
+          const SizedBox(height: 16),
+          if (_livePos != null) _livePositionChip(),
+          const SizedBox(height: 12),
+          _positioningStatus(),
         ],
       ),
     );
@@ -249,11 +327,7 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
       child: Center(
         child: Transform.rotate(
           angle: rotationRadians,
-          child: const Icon(
-            Icons.navigation,
-            size: 140,
-            color: Colors.blue,
-          ),
+          child: const Icon(Icons.navigation, size: 140, color: Colors.blue),
         ),
       ),
     );
@@ -289,6 +363,64 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
     );
   }
 
+  Widget _livePositionChip() {
+    final p = _livePos!;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xffe0f2fe),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.my_location, size: 16, color: Color(0xff0284c7)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'You are in ${p.display}  (${(p.confidence * 100).round()}%)',
+              style: const TextStyle(fontSize: 12, color: Color(0xff0369a1)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _positioningStatus() {
+    if (_usingWifiEstimate) {
+      return Card(
+        color: const Color(0xffecfdf5),
+        child: ListTile(
+          leading: const Icon(Icons.wifi, color: Color(0xff16a34a)),
+          title: const Text('Using WiFi indoor estimate'),
+          subtitle: Text(
+            _gpsAccuracy > 0
+                ? 'GPS is weak (about +/- ${_gpsAccuracy.round()} m).'
+                : 'GPS is unavailable.',
+          ),
+        ),
+      );
+    }
+    if (_gpsAccuracy > 25) {
+      return const Card(
+        color: Color(0xfffff4e5),
+        child: ListTile(
+          leading: Icon(Icons.warning_amber, color: Colors.orange),
+          title: Text('Weak GPS signal'),
+          subtitle: Text('Move to an open area for a more accurate arrow.'),
+        ),
+      );
+    }
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.gps_fixed, color: Color(0xff2563eb)),
+        title: const Text('Using GPS'),
+        subtitle: Text('Accuracy is about +/- ${_gpsAccuracy.round()} m.'),
+      ),
+    );
+  }
+
   Widget _arrivedView(double meters) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -298,17 +430,25 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
           const Icon(Icons.flag_circle, color: Colors.green, size: 96),
           const SizedBox(height: 12),
           Text(
-            'You have reached ${widget.destinationName}',
+            widget.guidanceVia.isEmpty
+                ? 'You have reached ${widget.destinationName}'
+                : 'You have reached ${widget.guidanceVia}',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Now follow the indoor steps to your exact room.',
+          Text(
+            widget.guidanceVia.isEmpty
+                ? 'Now follow the indoor steps to your exact room.'
+                : 'Continue with the remaining directions to ${widget.destinationName}.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.black54),
           ),
           const SizedBox(height: 20),
+          if (_livePos != null) ...[
+            _livePositionChip(),
+            const SizedBox(height: 12),
+          ],
           if (widget.indoorSteps.isEmpty)
             const Card(
               child: ListTile(
@@ -317,14 +457,45 @@ class _ArrowNavigationScreenState extends State<ArrowNavigationScreen> {
               ),
             )
           else
-            ...widget.indoorSteps.asMap().entries.map(
-              (entry) => Card(
+            ...widget.indoorSteps.asMap().entries.map((entry) {
+              final done = entry.key <= _reachedStep;
+              final active = entry.key == _reachedStep + 1;
+              return Card(
+                color: done ? const Color(0xffecfdf5) : null,
+                shape: active
+                    ? RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: const BorderSide(
+                          color: Color(0xff2563eb),
+                          width: 1.5,
+                        ),
+                      )
+                    : null,
                 child: ListTile(
-                  leading: CircleAvatar(child: Text('${entry.key + 1}')),
-                  title: Text(entry.value),
+                  leading: done
+                      ? const CircleAvatar(
+                          backgroundColor: Color(0xff16a34a),
+                          child: Icon(Icons.check, color: Colors.white),
+                        )
+                      : CircleAvatar(
+                          backgroundColor: active
+                              ? const Color(0xff2563eb)
+                              : const Color(0xffe2e8f0),
+                          foregroundColor: active
+                              ? Colors.white
+                              : Colors.black54,
+                          child: Text('${entry.key + 1}'),
+                        ),
+                  title: Text(
+                    entry.value.text,
+                    style: TextStyle(
+                      decoration: done ? TextDecoration.lineThrough : null,
+                      color: done ? const Color(0xff64748b) : null,
+                    ),
+                  ),
                 ),
-              ),
-            ),
+              );
+            }),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: () => setState(() => _arrived = false),
